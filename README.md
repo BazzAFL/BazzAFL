@@ -1,4 +1,4 @@
-### Hi there 👋
+### We open-source the core files of BazzAFL. More files to come.
 
 <!--
 **BazzAFL/BazzAFL** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
