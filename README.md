@@ -1,13 +1,5 @@
-# American Fuzzy Lop plus plus (AFL++)
-
-<img align="right" src="https://raw.githubusercontent.com/AFLplusplus/Website/master/static/aflpp_bg.svg" alt="AFL++ logo" width="250" heigh="250">
-
-Release version: [4.01c](https://github.com/AFLplusplus/AFLplusplus/releases)
-
-GitHub version: 4.02a
-
-Repository:
-[https://github.com/AFLplusplus/AFLplusplus](https://github.com/AFLplusplus/AFLplusplus)
+# BazzAFL-based on AFL++
+GitHub version: v1.0
 
 AFL++ is maintained by:
 
