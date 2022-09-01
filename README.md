@@ -2,33 +2,14 @@
 GitHub version: v1.0
 
 This is developed based on AFLplusplus (4.01c), thanks to its amazing maintainers and community!
-
-
-
-Here is some information to get you started:
-
-* For an overview of the AFL++ documentation and a very helpful graphical guide,
-  please visit [docs/README.md](docs/README.md).
-* To get you started with tutorials, go to
-  [docs/tutorials.md](docs/tutorials.md).
-* For releases, see the
-  [Releases tab](https://github.com/AFLplusplus/AFLplusplus/releases) and
-  [branches](#branches). The best branches to use are, however, `stable` or
-  `dev` - depending on your risk appetite. Also take a look at the list of
-  [important changes in AFL++](docs/important_changes.md) and the list of
-  [features](docs/features.md).
-* If you want to use AFL++ for your academic work, check the
-  [papers page](https://aflplus.plus/papers/) on the website.
-* To cite our work, look at the [Cite](#cite) section.
-* For comparisons, use the fuzzbench `aflplusplus` setup, or use
-  `afl-clang-fast` with `AFL_LLVM_CMPLOG=1`. You can find the `aflplusplus`
-  default configuration on Google's
-  [fuzzbench](https://github.com/google/fuzzbench/tree/master/fuzzers/aflplusplus).
   
 ## Getting started
 
 ## Prerequisite
-Tested on a machine with Ubuntu 16.04/18.04/20.04 LLVM 13.0.0 <br/>
+Firstly, Please follow the instructions of building afl++  (please refer to README_aflpp) <br/>
+
+We have tested on a machine with Ubuntu 16.04/18.04/20.04 LLVM 13.0.0 <br/>
+
 We recommend running BazzAFL on Ubuntu 16.04/20.04
 - LLVM >= 11 (recommend [pre-built LLVM 13.0.0](https://github.com/llvm/llvm-project/releases/tag/llvmorg-13.0.0))
 - GLib–2.0 (source:[glib2.0](https://gitlab.gnome.org/GNOME/glib/))
