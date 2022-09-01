@@ -3,13 +3,6 @@ GitHub version: v1.0
 
 This is developed based on AFLplusplus (4.01c), thanks to its amazing maintainers and community!
 
-
-AFL++ is a superior fork to Google's AFL - more speed, more and better
-mutations, more and better instrumentation, custom module support, etc.
-
-You are free to copy, modify, and distribute AFL++ with attribution under the
-terms of the Apache-2.0 License. See the [LICENSE](LICENSE) for details.
-
 ## Getting started
 
 Here is some information to get you started:
@@ -32,13 +25,13 @@ Here is some information to get you started:
   default configuration on Google's
   [fuzzbench](https://github.com/google/fuzzbench/tree/master/fuzzers/aflplusplus).
 
-## Building and installing AFL++
+## Building and installing BazzAFL
 
 To have AFL++ easily available with everything compiled, pull the image directly
 from the Docker Hub (available for both x86_64 and arm64):
 
 ```shell
-docker pull aflplusplus/aflplusplus
+git clone pull aflplusplus/aflplusplus
 docker run -ti -v /location/of/your/target:/src aflplusplus/aflplusplus
 ```
 
