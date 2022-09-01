@@ -1,15 +1,8 @@
 # BazzAFL-based on AFL++
 GitHub version: v1.0
 
-AFL++ is maintained by:
+This is developed based on AFLplusplus (4.01c), thanks to its amazing maintainers and community!
 
-* Marc "van Hauser" Heuse <mh@mh-sec.de>
-* Heiko "hexcoder-" Eißfeldt <heiko.eissfeldt@hexco.de>
-* Andrea Fioraldi <andreafioraldi@gmail.com>
-* Dominik Maier <mail@dmnk.co>
-* Documentation: Jana Aydinbas <jana.aydinbas@gmail.com>
-
-Originally developed by Michał "lcamtuf" Zalewski.
 
 AFL++ is a superior fork to Google's AFL - more speed, more and better
 mutations, more and better instrumentation, custom module support, etc.
