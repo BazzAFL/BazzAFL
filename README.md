@@ -60,3 +60,7 @@ If you want to try BazzAFL on a new program,
 ```
 PS:In order to improve the efficiency of BazzAFL, the Explore mode is used by default when using the -z option to prevent the total energy of the seed groups too small
 
+## Analyze 
+
+- You can always view the process of BazzAFL in the `plot_data`(by aflpp) and `mb_record` log files, and also observe the generation of the subseeds in the subseeds folder(replaced subseed will be deleted and free at the end of fuzzing in case sth uncertain happens)
+
