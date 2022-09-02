@@ -617,7 +617,7 @@ void read_foreign_testcases(afl_state_t *afl, int first) {
 
         }
 
-        u32 len = write_to_testcase(afl, (void **)&mem, st.st_size, 1);
+        u32 len = write_to_testcase(afl, mem, st.st_size, 1);
         fault = fuzz_run_target(afl, &afl->fsrv, afl->fsrv.exec_tmout);
         afl->syncing_party = foreign_name;
         afl->queued_imported += save_if_interesting(afl, mem, len, fault);
@@ -887,12 +887,15 @@ void perform_dry_run(afl_state_t *afl) {
 
     res = calibrate_case(afl, q, use_mem, 0, 1);
 
+    /* BazzAFL */
+    update_multibugs_seed(q);
+
     if (afl->stop_soon) { return; }
 
     if (res == afl->crash_mode || res == FSRV_RUN_NOBITS) {
 
-      SAYF(cGRA "    len = %u, map size = %u, exec speed = %llu us\n" cRST,
-           q->len, q->bitmap_size, q->exec_us);
+      SAYF(cGRA "    len = %u, map size = %u, exec speed = %llu us, func_c = %u, oom_size = %u, ac_c = %u, oob_total = %.3f\n" cRST,
+           q->len, q->bitmap_size, q->exec_us, q->func_count, q->oom_size, q->ac_count, q->oob_total);
 
     }
 
@@ -1911,7 +1914,7 @@ int check_main_node_exists(afl_state_t *afl) {
 void setup_dirs_fds(afl_state_t *afl) {
 
   u8 *tmp;
-
+  s32 fd1;
   ACTF("Setting up output directories...");
 
   if (afl->sync_id && mkdir(afl->sync_dir, 0700) && errno != EEXIST) {
@@ -1958,6 +1961,30 @@ void setup_dirs_fds(afl_state_t *afl) {
     close(fd);
 
   }
+
+  /* BazzAFL */
+
+  tmp = alloc_printf("%s/mb_seeds", afl->out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
+  tmp = alloc_printf("%s/mb_seeds/func", afl->out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
+  tmp = alloc_printf("%s/mb_seeds/oom", afl->out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
+  tmp = alloc_printf("%s/mb_seeds/ac", afl->out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
+  tmp = alloc_printf("%s/mb_seeds/oob", afl->out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
+  /* BazzAFL */
 
   /* Queue directory for any starting & discovered paths. */
 
@@ -2065,6 +2092,15 @@ void setup_dirs_fds(afl_state_t *afl) {
 
   }
 
+  tmp = alloc_printf("%s/mb_record", afl->out_dir);
+  fd1 = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (fd1 < 0) PFATAL("Unable to create '%s'", tmp);
+  ck_free(tmp);
+
+  MB_record = fdopen(fd1, "w");
+  if (!MB_record) PFATAL("fdopen() failed");
+  fprintf(MB_record, "# unix_time, unique_hangs, unique_crashes, "
+                    "max_func_count, max_ac_count_global, max_oom_size_global, max_oob_total_global, sec_wo_find, sec_wo_find_path, sec_wo_find_func, sec_wo_find_ac, sec_wo_find_oom, sec_wo_find_oob \n");
   fflush(afl->fsrv.plot_file);
 
   /* ignore errors */

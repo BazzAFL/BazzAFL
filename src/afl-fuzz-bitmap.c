@@ -221,6 +221,10 @@ inline u8 has_new_bits(afl_state_t *afl, u8 *virgin_map) {
 #endif                                                     /* ^WORD_SIZE_64 */
 
   u8 ret = 0;
+
+  /* BazzAFL */
+  memset(NewFeatureId,0,sizeof(NewFeatureId));
+
   while (i--) {
 
     if (unlikely(*current)) discover_word(&ret, current, virgin);
@@ -292,15 +296,6 @@ void minimize_bits(afl_state_t *afl, u8 *dst, u8 *src) {
 
 u8 *describe_op(afl_state_t *afl, u8 new_bits, size_t max_description_len) {
 
-  u8 is_timeout = 0;
-
-  if (new_bits & 0xf0) {
-
-    new_bits -= 0x80;
-    is_timeout = 1;
-
-  }
-
   size_t real_max_len =
       MIN(max_description_len, sizeof(afl->describe_op_buf_256));
   u8 *ret = afl->describe_op_buf_256;
@@ -334,7 +329,6 @@ u8 *describe_op(afl_state_t *afl, u8 new_bits, size_t max_description_len) {
       ret[len_current] = '\0';
 
       ssize_t size_left = real_max_len - len_current - strlen(",+cov") - 2;
-      if (is_timeout) { size_left -= strlen(",+tout"); }
       if (unlikely(size_left <= 0)) FATAL("filename got too long");
 
       const char *custom_description =
@@ -379,8 +373,6 @@ u8 *describe_op(afl_state_t *afl, u8 new_bits, size_t max_description_len) {
     }
 
   }
-
-  if (is_timeout) { strcat(ret, ",+tout"); }
 
   if (new_bits == 2) { strcat(ret, ",+cov"); }
 
@@ -459,10 +451,13 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
 
   u8  fn[PATH_MAX];
   u8 *queue_fn = "";
-  u8  new_bits = 0, keeping = 0, res, classified = 0, is_timeout = 0;
+  u8  new_bits = 0, keeping = 0, res, classified = 0;
   s32 fd;
   u64 cksum = 0;
 
+  /* BazzAFL */
+  cksum_temp = 0;
+  u8 exit_flag = 0;
   /* Update path frequency. */
 
   /* Generating a hash on every input is super expensive. Bad idea and should
@@ -487,20 +482,18 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
     if (likely(!new_bits)) {
 
       if (unlikely(afl->crash_mode)) { ++afl->total_crashes; }
-      return 0;
-
-    }
+      /* BazzAFL */
+      exit_flag = 1;
+      // return 0;
+    }else{
 
     classified = new_bits;
 
-  save_to_queue:
-
 #ifndef SIMPLE_FILES
 
-    queue_fn =
-        alloc_printf("%s/queue/id:%06u,%s", afl->out_dir, afl->queued_items,
-                     describe_op(afl, new_bits + is_timeout,
-                                 NAME_MAX - strlen("id:000000,")));
+    queue_fn = alloc_printf(
+        "%s/queue/id:%06u,%s", afl->out_dir, afl->queued_items,
+        describe_op(afl, new_bits, NAME_MAX - strlen("id:000000,")));
 
 #else
 
@@ -512,7 +505,7 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
     if (unlikely(fd < 0)) { PFATAL("Unable to create '%s'", queue_fn); }
     ck_write(fd, mem, len, queue_fn);
     close(fd);
-    add_to_queue(afl, queue_fn, len, 0);
+    // add_to_queue(afl, queue_fn, len, 0);
 
 #ifdef INTROSPECTION
     if (afl->custom_mutators_count && afl->current_custom_fuzz) {
@@ -542,6 +535,29 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
     }
 
 #endif
+    /* BazzAFL */
+    add_to_queue_MB(afl, queue_fn, len, 0);
+    if(MB_Options.EnergyEnabled)
+    {
+      u64* current = (u64*)NewFeatureId;
+      int Idx = 0;
+      int  m = (MAP_SIZE >> 3);
+      for (int i = 0; i < m;i++)
+      {
+        if(unlikely(*current)){
+          u8* cur = (u8*)current;
+          for (int j = 0;j<8;j++)
+          {
+            if(unlikely(cur[j]))
+            {
+              Idx = (i << 3) + j;
+              AddRareFeature(afl,Idx);
+            }
+          }
+        }
+        current++;
+      }
+    }
 
     if (new_bits == 2) {
 
@@ -559,13 +575,18 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
     }
 
     /* due to classify counts we have to recalculate the checksum */
-    afl->queue_top->exec_cksum =
-        hash64(afl->fsrv.trace_bits, afl->fsrv.map_size, HASH_CONST);
 
+    /* BazzAFL */
+    // need to use real_map_size to cal the real trace
+    cksum_temp = hash64(afl->fsrv.trace_bits, afl->fsrv.map_size, HASH_CONST);
+    // u64 cksum_temp = hash64(afl->fsrv.trace_bits, MAP_SIZE, HASH_CONST);
+    afl->queue_top->exec_cksum = cksum_temp;
     /* Try to calibrate inline; this also calls update_bitmap_score() when
        successful. */
 
     res = calibrate_case(afl, afl->queue_top, mem, afl->queue_cycle - 1, 0);
+    /* BazzAFL*/
+    update_multibugs_seed(afl->queue_top);
 
     if (unlikely(res == FSRV_RUN_ERROR)) {
 
@@ -579,8 +600,25 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
 
     }
 
-    keeping = 1;
 
+    keeping = 1;
+    } // without finding new edge,but still needs to check if finds new metrics
+
+    /* BazzAFL */
+    /* Generating a hash on every input is super expensive. Bad idea and should
+     only be used for special schedules */
+
+    if (!classified) {
+      classify_counts(&afl->fsrv);
+      classified = 1;
+    }
+    if(cksum_temp == 0)
+    {
+      cksum_temp = hash64(afl->fsrv.trace_bits, afl->fsrv.map_size, HASH_CONST);
+    }
+    Add_to_Group(afl, len, new_bits, mem);
+    if(exit_flag)
+      return 0;
   }
 
   switch (fault) {
@@ -611,7 +649,7 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
 
       }
 
-      is_timeout = 0x80;
+      ++afl->saved_tmouts;
 #ifdef INTROSPECTION
       if (afl->custom_mutators_count && afl->current_custom_fuzz) {
 
@@ -648,7 +686,7 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
       if (afl->fsrv.exec_tmout < afl->hang_tmout) {
 
         u8 new_fault;
-        len = write_to_testcase(afl, &mem, len, 0);
+        len = write_to_testcase(afl, mem, len, 0);
         new_fault = fuzz_run_target(afl, &afl->fsrv, afl->hang_tmout);
         classify_counts(&afl->fsrv);
 
@@ -662,20 +700,7 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
 
         }
 
-        if (afl->stop_soon || new_fault != FSRV_RUN_TMOUT) {
-
-          if (afl->afl_env.afl_keep_timeouts) {
-
-            ++afl->saved_tmouts;
-            goto save_to_queue;
-
-          } else {
-
-            return keeping;
-
-          }
-
-        }
+        if (afl->stop_soon || new_fault != FSRV_RUN_TMOUT) { return keeping; }
 
       }
 
@@ -720,12 +745,7 @@ save_if_interesting(afl_state_t *afl, void *mem, u32 len, u8 fault) {
 
       }
 
-      if (unlikely(!afl->saved_crashes) &&
-          (afl->afl_env.afl_no_crash_readme != 1)) {
-
-        write_crash_readme(afl);
-
-      }
+      if (unlikely(!afl->saved_crashes)) { write_crash_readme(afl); }
 
 #ifndef SIMPLE_FILES
 

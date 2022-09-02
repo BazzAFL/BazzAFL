@@ -198,8 +198,6 @@ struct queue_entry {
   u32 func_count;                     /* func count(single seed)          */
   u32 ac_count;                       /* ac count(single seed)            */
   u32 oom_size;                       /* oom size(single seed)            */
-  // float oob_quotient;
-  // u32 oob_num;
   float oob_total;                    /* oom_total=quotient/num           */
 
   u32 max_func_count;                 /* max func count in whcih(4 seeds) */
@@ -227,14 +225,14 @@ struct queue_entry {
   float Energy;
   int SumIncidence;
   int NumExecutedMutations;
-  /* Entropic */
+
 
   /* Mutate */
   // u32 *key_byte[4];     // 0-255 value that maxmize seed_type metric,10000 is max len of input
   int key_byte_num[4];
   GQueue* key_byte[4];
 
-  /* Mutate */
+
   /* BazzAFL */
 
 };
@@ -1281,8 +1279,8 @@ static inline u32 rand_below_MB(afl_state_t *afl, u32 limit, u8 seed_type) {
   {
     return unbiased_rnd % limit;
   }else{
-    if(unbiased_rnd % 5){
-      return unbiased_rnd % limit; // 20% will use original rand_below
+    if(unbiased_rnd % 2){
+      return unbiased_rnd % limit; // 50% will use original rand_below
     }else{
       u32 ret = 0;
       u8 seed = seed_type - 1;
@@ -1395,11 +1393,11 @@ typedef struct
   int SumIncidence;
 } EnergyUnit;
 extern FILE* MB_record;
-extern struct queue_entry *delete_buf[10000];
+extern struct queue_entry *delete_buf[100000];
 extern u32 delete_num;
 /* Entropic */
 extern GQueue* RareFeatures;
-extern int MaxNumberOfRarestFeatures;
+extern u32 MaxNumberOfRarestFeatures;
 extern int FreqOfMostAbundantRareFeature;
 extern int FeatureFrequencyThreshold;
 extern u16 GlobalFeatureFreqs[MAP_SIZE];
@@ -1422,8 +1420,6 @@ extern u64 last_ac_time,
            last_oom_time,
            last_oob_time;
 extern u32 NumberOfSubSeed[4];
-
-// const char s[2] = "/";
 
 extern struct queue_entry *queue_temp;
 

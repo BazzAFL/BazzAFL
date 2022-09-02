@@ -74,7 +74,7 @@ fuzz_run_target(afl_state_t *afl, afl_forkserver_t *fsrv, u32 timeout) {
    rewound and truncated. */
 
 u32 __attribute__((hot))
-write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
+write_to_testcase(afl_state_t *afl, void *mem, u32 len, u32 fix) {
 
 #ifdef _AFL_DOCUMENT_MUTATIONS
   s32  doc_fd;
@@ -86,7 +86,7 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
   if ((doc_fd = open(fn, O_WRONLY | O_CREAT | O_TRUNC, DEFAULT_PERMISSION)) >=
       0) {
 
-    if (write(doc_fd, *mem, len) != len)
+    if (write(doc_fd, mem, len) != len)
       PFATAL("write to mutation file failed: %s", fn);
     close(doc_fd);
 
@@ -97,7 +97,7 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
   if (unlikely(afl->custom_mutators_count)) {
 
     ssize_t new_size = len;
-    u8 *    new_mem = *mem;
+    u8 *    new_mem = mem;
     u8 *    new_buf = NULL;
 
     LIST_FOREACH(&afl->custom_mutator_list, struct custom_mutator, {
@@ -130,10 +130,8 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
 
     }
 
-    if (new_mem != *mem) { *mem = new_mem; }
-
     /* everything as planned. use the potentially new data. */
-    afl_fsrv_write_to_testcase(&afl->fsrv, *mem, new_size);
+    afl_fsrv_write_to_testcase(&afl->fsrv, new_mem, new_size);
     len = new_size;
 
   } else {
@@ -149,7 +147,7 @@ write_to_testcase(afl_state_t *afl, void **mem, u32 len, u32 fix) {
     }
 
     /* boring uncustom. */
-    afl_fsrv_write_to_testcase(&afl->fsrv, *mem, len);
+    afl_fsrv_write_to_testcase(&afl->fsrv, mem, len);
 
   }
 
@@ -372,7 +370,7 @@ u8 calibrate_case(afl_state_t *afl, struct queue_entry *q, u8 *use_mem,
   /* we need a dummy run if this is LTO + cmplog */
   if (unlikely(afl->shm.cmplog_mode)) {
 
-    (void)write_to_testcase(afl, (void **)&use_mem, q->len, 1);
+    (void)write_to_testcase(afl, use_mem, q->len, 1);
 
     fault = fuzz_run_target(afl, &afl->fsrv, use_tmout);
 
@@ -415,7 +413,7 @@ u8 calibrate_case(afl_state_t *afl, struct queue_entry *q, u8 *use_mem,
 
     u64 cksum;
 
-    (void)write_to_testcase(afl, (void **)&use_mem, q->len, 1);
+    (void)write_to_testcase(afl, use_mem, q->len, 1);
 
     fault = fuzz_run_target(afl, &afl->fsrv, use_tmout);
 
@@ -437,7 +435,9 @@ u8 calibrate_case(afl_state_t *afl, struct queue_entry *q, u8 *use_mem,
 #endif
 
     classify_counts(&afl->fsrv);
+
     cksum = hash64(afl->fsrv.trace_bits, afl->fsrv.map_size, HASH_CONST);
+
     if (q->exec_cksum != cksum) {
 
       hnb = has_new_bits(afl, afl->virgin_bits);
@@ -519,6 +519,24 @@ u8 calibrate_case(afl_state_t *afl, struct queue_entry *q, u8 *use_mem,
   q->bitmap_size = count_bytes(afl, afl->fsrv.trace_bits);
   q->handicap = handicap;
   q->cal_failed = 0;
+
+  /* BazzAFL */
+
+  q->func_count = afl->fsrv.extra_shm_ptr[0] + afl->fsrv.extra_shm_ptr[1] + afl->fsrv.extra_shm_ptr[2];
+  q->ac_count = afl->fsrv.extra_shm_ptr[3];
+  q->oom_size = afl->fsrv.extra_shm_ptr[4];
+  if(likely(afl->fsrv.extra_shm_ptr[5]!=0)){
+    q->oob_total = (*afl->fsrv.extra_shm_ptr_oob / afl->fsrv.extra_shm_ptr[5]);
+  }else{
+    q->oob_total = 0;
+  }
+  if(q->seed_type==0){
+    q->max_func_count =  q->func_count;
+    q->max_ac_count = q->ac_count;
+    q->max_oom_size = q->oom_size;
+    q->max_oob_total = q->oob_total;
+  }
+  /* BazzAFL */
 
   afl->total_bitmap_size += q->bitmap_size;
   ++afl->total_bitmap_entries;
@@ -726,7 +744,7 @@ void sync_fuzzers(afl_state_t *afl) {
         /* See what happens. We rely on save_if_interesting() to catch major
            errors and save the test case. */
 
-        (void)write_to_testcase(afl, (void **)&mem, st.st_size, 1);
+        (void)write_to_testcase(afl, mem, st.st_size, 1);
 
         fault = fuzz_run_target(afl, &afl->fsrv, afl->fsrv.exec_tmout);
 
@@ -868,6 +886,7 @@ u8 trim_case(afl_state_t *afl, struct queue_entry *q, u8 *in_buf) {
 
       ++afl->trim_execs;
       classify_counts(&afl->fsrv);
+      
       cksum = hash64(afl->fsrv.trace_bits, afl->fsrv.map_size, HASH_CONST);
 
       /* If the deletion had no impact on the trace, make it permanent. This
@@ -969,7 +988,7 @@ common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
 
   u8 fault;
 
-  len = write_to_testcase(afl, (void **)&out_buf, len, 0);
+  len = write_to_testcase(afl, out_buf, len, 0);
 
   fault = fuzz_run_target(afl, &afl->fsrv, afl->fsrv.exec_tmout);
 
@@ -1004,6 +1023,16 @@ common_fuzz_stuff(afl_state_t *afl, u8 *out_buf, u32 len) {
   /* This handles FAULT_ERROR for us: */
 
   afl->queued_discovered += save_if_interesting(afl, out_buf, len, fault);
+
+  /* BazzAFL*/
+  /* Energy */
+  // collect edge feature info for the seed
+  if(!MB_Options.OriginalAFL)
+  {
+    UpdateFeatureFrequency(afl, afl->queue_cur);
+  }
+
+  afl->queue_cur->NumExecutedMutations++;
 
   if (!(afl->stage_cur % afl->stats_update_freq) ||
       afl->stage_cur + 1 == afl->stage_max) {

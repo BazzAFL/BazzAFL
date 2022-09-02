@@ -24,6 +24,7 @@
  */
 
 #include "afl-fuzz.h"
+#include <glib.h>
 #include "envs.h"
 #include <limits.h>
 
@@ -59,7 +60,7 @@ void write_setup_file(afl_state_t *afl, u32 argc, char **argv) {
 
     if (i) fprintf(f, " ");
 #ifdef __ANDROID__
-    if (memchr(argv[i], '\'', strlen(argv[i]))) {
+    if (memchr(argv[i], '\'', sizeof(argv[i]))) {
 
 #else
     if (index(argv[i], '\'')) {
@@ -367,6 +368,33 @@ void write_stats_file(afl_state_t *afl, u32 t_bytes, double bitmap_cvg,
 
 /* Update the plot file if there is a reason to. */
 
+/* BazzAFL */
+void maybe_update_MB_record(afl_state_t *afl) {
+
+  /* Fields in the file:
+
+      # unix_time, cur_seed_type, func_rep, total_func_rep, "
+            "oom_rep, total_oom_rep, ac_rep, total_ac_rep, "
+            "paths_join, total_paths, unique_hangs\n"); */
+
+  u64 cur = get_cur_time();
+  int sec_wo_find_path = (int)((afl->last_find_time > 0)?(cur - afl->last_find_time)/ 1000  : 0);
+
+  int sec_wo_find_func = (int)((last_func_time > 0)?(cur - last_func_time)/ 1000  : 0);
+  int sec_wo_find_ac = (int)((last_ac_time > 0)?(cur - last_ac_time)/ 1000  : 0);
+  int sec_wo_find_oom = (int)((last_oom_time > 0)?(cur - last_oom_time)/ 1000  : 0);
+  int sec_wo_find_oob = (int)((last_oob_time > 0)?(cur - last_oob_time)/ 1000  : 0);
+  int sec_wo_find = MIN(MIN(MIN(MIN(sec_wo_find_path, sec_wo_find_func), sec_wo_find_ac), sec_wo_find_oom), sec_wo_find_oob);
+  fprintf(MB_record,
+          "%llu, %llu, %llu, %u, %u, %u, %f, %d, %d, %d, %d, %d, %d\n",
+          get_cur_time() / 1000, afl->saved_hangs, afl->saved_crashes, max_func_count_global, max_ac_count_global, max_oom_size_global, max_oob_total_global,
+          sec_wo_find, sec_wo_find_path, sec_wo_find_func, sec_wo_find_ac, sec_wo_find_oom, sec_wo_find_oob); /* ignore errors */
+
+  fflush(MB_record);
+
+}
+/* BazzAFL */
+
 void maybe_update_plot_file(afl_state_t *afl, u32 t_bytes, double bitmap_cvg,
                             double eps) {
 
@@ -610,7 +638,7 @@ void show_stats_normal(afl_state_t *afl) {
 
     afl->stats_last_plot_ms = cur_ms;
     maybe_update_plot_file(afl, t_bytes, t_byte_ratio, afl->stats_avg_exec);
-
+    maybe_update_MB_record(afl);
   }
 
   /* Honor AFL_EXIT_WHEN_DONE and AFL_BENCH_UNTIL_CRASH. */
@@ -1021,15 +1049,13 @@ void show_stats_normal(afl_state_t *afl) {
 
   if (unlikely(!afl->skip_deterministic)) {
 
-    sprintf(tmp, "%s/%s, %s/%s, %s/%s, %s/%s",
+    sprintf(tmp, "%s/%s, %s/%s, %s/%s",
             u_stringify_int(IB(0), afl->stage_finds[STAGE_EXTRAS_UO]),
             u_stringify_int(IB(1), afl->stage_cycles[STAGE_EXTRAS_UO]),
             u_stringify_int(IB(2), afl->stage_finds[STAGE_EXTRAS_UI]),
             u_stringify_int(IB(3), afl->stage_cycles[STAGE_EXTRAS_UI]),
             u_stringify_int(IB(4), afl->stage_finds[STAGE_EXTRAS_AO]),
-            u_stringify_int(IB(5), afl->stage_cycles[STAGE_EXTRAS_AO]),
-            u_stringify_int(IB(6), afl->stage_finds[STAGE_EXTRAS_AI]),
-            u_stringify_int(IB(7), afl->stage_cycles[STAGE_EXTRAS_AI]));
+            u_stringify_int(IB(5), afl->stage_cycles[STAGE_EXTRAS_AO]));
 
   } else if (unlikely(!afl->extras_cnt || afl->custom_only)) {
 
@@ -1396,6 +1422,7 @@ void show_stats_pizza(afl_state_t *afl) {
 
     afl->stats_last_plot_ms = cur_ms;
     maybe_update_plot_file(afl, t_bytes, t_byte_ratio, afl->stats_avg_exec);
+    maybe_update_MB_record(afl);
 
   }
 
@@ -1841,15 +1868,13 @@ void show_stats_pizza(afl_state_t *afl) {
 
   if (unlikely(!afl->skip_deterministic)) {
 
-    sprintf(tmp, "%s/%s, %s/%s, %s/%s, %s/%s",
+    sprintf(tmp, "%s/%s, %s/%s, %s/%s",
             u_stringify_int(IB(0), afl->stage_finds[STAGE_EXTRAS_UO]),
             u_stringify_int(IB(1), afl->stage_cycles[STAGE_EXTRAS_UO]),
             u_stringify_int(IB(2), afl->stage_finds[STAGE_EXTRAS_UI]),
             u_stringify_int(IB(3), afl->stage_cycles[STAGE_EXTRAS_UI]),
             u_stringify_int(IB(4), afl->stage_finds[STAGE_EXTRAS_AO]),
-            u_stringify_int(IB(5), afl->stage_cycles[STAGE_EXTRAS_AO]),
-            u_stringify_int(IB(6), afl->stage_finds[STAGE_EXTRAS_AI]),
-            u_stringify_int(IB(7), afl->stage_cycles[STAGE_EXTRAS_AI]));
+            u_stringify_int(IB(5), afl->stage_cycles[STAGE_EXTRAS_AO]));
 
   } else if (unlikely(!afl->extras_cnt || afl->custom_only)) {
 

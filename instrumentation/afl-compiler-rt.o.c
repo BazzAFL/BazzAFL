@@ -88,7 +88,8 @@ extern ssize_t _kern_write(int fd, off_t pos, const void *buffer,
                            size_t bufferSize);
 #endif  // HAIKU
 
-static u8  __afl_area_initial[MAP_INITIAL_SIZE];
+/* BazzAFL */
+static u8  __afl_area_initial[MAP_INITIAL_SIZE + EXTRA_SHM];
 static u8 *__afl_area_ptr_dummy = __afl_area_initial;
 static u8 *__afl_area_ptr_backup = __afl_area_initial;
 
@@ -327,41 +328,6 @@ static void __afl_map_shm(void) {
 
   }
 
-  if (!id_str && __afl_area_ptr_dummy == __afl_area_initial) {
-
-    u32 val = 0;
-    u8 *ptr;
-
-    if ((ptr = getenv("AFL_MAP_SIZE")) != NULL) val = atoi(ptr);
-
-    if (val > MAP_INITIAL_SIZE) {
-
-      __afl_map_size = val;
-      __afl_area_ptr_dummy = malloc(__afl_map_size);
-      if (!__afl_area_ptr_dummy) {
-
-        fprintf(stderr,
-                "Error: AFL++ could not aquire %u bytes of memory, exiting!\n",
-                __afl_map_size);
-        exit(-1);
-
-      }
-
-    } else {
-
-      __afl_map_size = MAP_INITIAL_SIZE;
-
-    }
-
-    if (__afl_debug) {
-
-      fprintf(stderr, "DEBUG: (0) init map size is %u to %p\n", __afl_map_size,
-              __afl_area_ptr_dummy);
-
-    }
-
-  }
-
   /* If we're running under AFL, attach to the appropriate region, replacing the
      early-stage __afl_area_initial region that is needed to allow some really
      hacky .init code to work correctly in projects such as OpenSSL. */
@@ -500,26 +466,18 @@ static void __afl_map_shm(void) {
 
     }
 
-  } else if (__afl_final_loc > __afl_map_size) {
+  } else if (_is_sancov && __afl_area_ptr != __afl_area_initial) {
 
-    if (__afl_area_initial != __afl_area_ptr_dummy) {
+    free(__afl_area_ptr);
+    __afl_area_ptr = NULL;
 
-      free(__afl_area_ptr_dummy);
+    if (__afl_final_loc > MAP_INITIAL_SIZE) {
 
-    }
-
-    __afl_area_ptr_dummy = (u8 *)malloc(__afl_final_loc);
-    __afl_area_ptr = __afl_area_ptr_dummy;
-    __afl_map_size = __afl_final_loc;
-
-    if (!__afl_area_ptr_dummy) {
-
-      fprintf(stderr,
-              "Error: AFL++ could not aquire %u bytes of memory, exiting!\n",
-              __afl_final_loc);
-      exit(-1);
+      __afl_area_ptr = (u8 *)malloc(__afl_final_loc);
 
     }
+
+    if (!__afl_area_ptr) { __afl_area_ptr = __afl_area_ptr_dummy; }
 
   }
 
@@ -530,7 +488,7 @@ static void __afl_map_shm(void) {
     fprintf(stderr,
             "DEBUG: (2) id_str %s, __afl_area_ptr %p, __afl_area_initial %p, "
             "__afl_area_ptr_dummy %p, __afl_map_addr 0x%llx, MAP_SIZE "
-            "%u, __afl_final_loc %u, __afl_map_size %u, "
+            "%u, __afl_final_loc %u, __afl_map_size %u,"
             "max_size_forkserver %u/0x%x\n",
             id_str == NULL ? "<null>" : id_str, __afl_area_ptr,
             __afl_area_initial, __afl_area_ptr_dummy, __afl_map_addr, MAP_SIZE,
@@ -2357,4 +2315,3 @@ void __afl_set_persistent_mode(u8 mode) {
 }
 
 #undef write_error
-

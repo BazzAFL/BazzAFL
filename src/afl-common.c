@@ -25,12 +25,8 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#ifndef _GNU_SOURCE
-  #define _GNU_SOURCE
-#endif
-#ifndef __USE_GNU
-  #define __USE_GNU
-#endif
+#define _GNU_SOURCE
+#define __USE_GNU
 #include <string.h>
 #include <strings.h>
 #include <math.h>
@@ -719,23 +715,17 @@ char *get_afl_env(char *env) {
 
   char *val;
 
-  if ((val = getenv(env))) {
+  if ((val = getenv(env)) != NULL) {
 
-    if (*val) {
+    if (!be_quiet) {
 
-      if (!be_quiet) {
-
-        OKF("Enabled environment variable %s with value %s", env, val);
-
-      }
-
-      return val;
+      OKF("Loaded environment variable %s with value %s", env, val);
 
     }
 
   }
 
-  return NULL;
+  return val;
 
 }
 

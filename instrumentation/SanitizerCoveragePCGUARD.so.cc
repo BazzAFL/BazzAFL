@@ -50,7 +50,41 @@
 #include "debug.h"
 #include "afl-llvm-common.h"
 
+/* BazzAFL */
+// OOB Header
+#include "llvm/Transforms/Instrumentation/BoundsChecking.h"
+#include "llvm/Analysis/MemoryBuiltins.h" 
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/Analysis/TargetFolder.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 using namespace llvm;
+
+
+using BuilderTy = IRBuilder<TargetFolder>; // OOB
+std::vector<std::string> syscall_routines = {
+  // memory allocation
+  "calloc",  "malloc",   "realloc",  "free", 
+  // memory operation
+  "memcpy",  "memmove",  "memchr",   "memset",  
+  "memcmp",
+  // string operation
+  "strcpy",  "strncpy",  "strerror", "strlen",
+  "strcat",  "strncat",  "strcmp",   "strspn",
+  "strcoll", "strncmp",  "strxfrm",  "strstr",
+  "strchr",  "strcspn",  "strpbrk",  "strrchr", 
+  "strtok",
+  // TODO... add more interesting functions
+};
+bool is_syscall(std::string fn_name){
+  for(std::vector<std::string>::size_type i = 0; i < syscall_routines.size(); i++){
+    if(fn_name.compare(0, syscall_routines[i].size(), syscall_routines[i]) == 0)
+      return true;
+  }
+  return false;
+}
+/* BazzAFL */
 
 #define DEBUG_TYPE "sancov"
 
@@ -123,7 +157,9 @@ SanitizerCoverageOptions OverrideFromCL(SanitizerCoverageOptions Options) {
 using DomTreeCallback = function_ref<const DominatorTree *(Function &F)>;
 using PostDomTreeCallback =
     function_ref<const PostDominatorTree *(Function &F)>;
-
+/* BazzAFL */
+using TargetLibraryInfoCallback = function_ref<const TargetLibraryInfo &(Function &F)>;
+/* BazzAFL */
 class ModuleSanitizerCoverageAFL
     : public PassInfoMixin<ModuleSanitizerCoverageAFL> {
 
@@ -131,17 +167,18 @@ class ModuleSanitizerCoverageAFL
   ModuleSanitizerCoverageAFL(
       const SanitizerCoverageOptions &Options = SanitizerCoverageOptions())
       : Options(OverrideFromCL(Options)) {
-
   }
+  
+
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
 
   bool instrumentModule(Module &M, DomTreeCallback DTCallback,
-                        PostDomTreeCallback PDTCallback);
+                        PostDomTreeCallback PDTCallback, TargetLibraryInfoCallback TLI);
 
  private:
   void instrumentFunction(Function &F, DomTreeCallback DTCallback,
-                          PostDomTreeCallback PDTCallback);
+                          PostDomTreeCallback PDTCallback, TargetLibraryInfoCallback TLI);
   void InjectCoverageForIndirectCalls(Function &              F,
                                       ArrayRef<Instruction *> IndirCalls);
   void InjectTraceForCmp(Function &F, ArrayRef<Instruction *> CmpTraceTargets);
@@ -187,7 +224,10 @@ class ModuleSanitizerCoverageAFL
   GlobalVariable *SanCovLowestStack;
   Type *IntptrTy, *IntptrPtrTy, *Int64Ty, *Int64PtrTy, *Int32Ty, *Int32PtrTy,
       *Int16Ty, *Int8Ty, *Int8PtrTy, *Int1Ty, *Int1PtrTy;
-  Module *          CurModule;
+  /* BazzAFL */
+  Type *FloatTy;
+  /* BazzAFL */
+  Module *CurModule;
   std::string       CurModuleUniqueId;
   Triple            TargetTriple;
   LLVMContext *     C;
@@ -221,9 +261,11 @@ class ModuleSanitizerCoverageLegacyPass : public ModulePass {
 
   }
 
+
   bool runOnModule(Module &M) override {
 
     ModuleSanitizerCoverageAFL ModuleSancov(Options);
+
     auto DTCallback = [this](Function &F) -> const DominatorTree * {
 
       return &this->getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
@@ -237,7 +279,13 @@ class ModuleSanitizerCoverageLegacyPass : public ModulePass {
 
     };
 
-    return ModuleSancov.instrumentModule(M, DTCallback, PDTCallback);
+    auto TLI  = [this](Function &F) -> const TargetLibraryInfo & {
+
+      return this->getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
+
+    };   
+
+    return ModuleSancov.instrumentModule(M, DTCallback, PDTCallback, TLI);
 
   }
 
@@ -252,7 +300,11 @@ class ModuleSanitizerCoverageLegacyPass : public ModulePass {
 
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<PostDominatorTreeWrapperPass>();
-
+    /* BazzAFL */
+    // OOB
+    AU.addRequired<TargetLibraryInfoWrapperPass>();
+    AU.addRequired<ScalarEvolutionWrapperPass>();
+    /* BazzAFL */
   }
 
  private:
@@ -304,7 +356,13 @@ PreservedAnalyses ModuleSanitizerCoverageAFL::run(Module &               M,
 
   };
 
-  if (ModuleSancov.instrumentModule(M, DTCallback, PDTCallback))
+  auto TLI  = [&FAM](Function &F) -> const TargetLibraryInfo & {
+
+    return FAM.getResult<TargetLibraryAnalysis>(F);
+
+  };  
+
+  if (ModuleSancov.instrumentModule(M, DTCallback, PDTCallback, TLI))
     return PreservedAnalyses::none();
   return PreservedAnalyses::all();
 
@@ -313,25 +371,13 @@ PreservedAnalyses ModuleSanitizerCoverageAFL::run(Module &               M,
 std::pair<Value *, Value *> ModuleSanitizerCoverageAFL::CreateSecStartEnd(
     Module &M, const char *Section, Type *Ty) {
 
-  GlobalVariable *SecStart =
-      new GlobalVariable(M,
-#if LLVM_VERSION_MAJOR >= 15
-                         Ty,
-#else
-                         Ty->getPointerElementType(),
-#endif
-                         false, GlobalVariable::ExternalWeakLinkage, nullptr,
-                         getSectionStart(Section));
+  GlobalVariable *SecStart = new GlobalVariable(
+      M, Ty->getPointerElementType(), false,
+      GlobalVariable::ExternalWeakLinkage, nullptr, getSectionStart(Section));
   SecStart->setVisibility(GlobalValue::HiddenVisibility);
-  GlobalVariable *SecEnd =
-      new GlobalVariable(M,
-#if LLVM_VERSION_MAJOR >= 15
-                         Ty,
-#else
-                         Ty->getPointerElementType(),
-#endif
-                         false, GlobalVariable::ExternalWeakLinkage, nullptr,
-                         getSectionEnd(Section));
+  GlobalVariable *SecEnd = new GlobalVariable(
+      M, Ty->getPointerElementType(), false,
+      GlobalVariable::ExternalWeakLinkage, nullptr, getSectionEnd(Section));
   SecEnd->setVisibility(GlobalValue::HiddenVisibility);
   IRBuilder<> IRB(M.getContext());
   if (!TargetTriple.isOSBinFormatCOFF())
@@ -388,7 +434,7 @@ Function *ModuleSanitizerCoverageAFL::CreateInitCallsForSections(
 }
 
 bool ModuleSanitizerCoverageAFL::instrumentModule(
-    Module &M, DomTreeCallback DTCallback, PostDomTreeCallback PDTCallback) {
+    Module &M, DomTreeCallback DTCallback, PostDomTreeCallback PDTCallback, TargetLibraryInfoCallback TLI) {
 
   setvbuf(stdout, NULL, _IONBF, 0);
   if (getenv("AFL_DEBUG")) debug = 1;
@@ -444,6 +490,9 @@ bool ModuleSanitizerCoverageAFL::instrumentModule(
   Int16Ty = IRB.getInt16Ty();
   Int8Ty = IRB.getInt8Ty();
   Int1Ty = IRB.getInt1Ty();
+  /* BazzAFL */
+  FloatTy = IRB.getFloatTy();
+  /* BazzAFL */
   LLVMContext &Ctx = M.getContext();
 
   AFLMapPtr =
@@ -520,7 +569,7 @@ bool ModuleSanitizerCoverageAFL::instrumentModule(
       M.getOrInsertFunction(SanCovTracePCGuardName, VoidTy, Int32PtrTy);
 
   for (auto &F : M)
-    instrumentFunction(F, DTCallback, PDTCallback);
+    instrumentFunction(F, DTCallback, PDTCallback, TLI);
 
   Function *Ctor = nullptr;
 
@@ -671,7 +720,7 @@ bool IsInterestingCmp(ICmpInst *CMP, const DominatorTree *DT,
 }
 
 void ModuleSanitizerCoverageAFL::instrumentFunction(
-    Function &F, DomTreeCallback DTCallback, PostDomTreeCallback PDTCallback) {
+    Function &F, DomTreeCallback DTCallback, PostDomTreeCallback PDTCallback, TargetLibraryInfoCallback TLICallback) {
 
   if (F.empty()) return;
   if (!isInInstrumentList(&F, FMNAME)) return;
@@ -707,12 +756,391 @@ void ModuleSanitizerCoverageAFL::instrumentFunction(
   const DominatorTree *    DT = DTCallback(F);
   const PostDominatorTree *PDT = PDTCallback(F);
   bool                     IsLeafFunc = true;
+  /* BazzAFL */
+  const TargetLibraryInfo TLI = TLICallback(F);
+  /* BazzAFL */
 
+  Module *M = F.getParent();
+  // DL = &M->getDataLayout();
+  const DataLayout &DL = F.getParent()->getDataLayout();
+  ObjectSizeOpts EvalOpts;    
+  EvalOpts.RoundToAlign = true;
+  ObjectSizeOffsetEvaluator ObjSizeEval(DL, &TLI, F.getContext(), EvalOpts);
+  LLVMContext &C = F.getParent()->getContext();
   for (auto &BB : F) {
+
+    /* BazzAFL */
+    int mem_read_cnt = 0;
+    int mem_write_cnt= 0;
+    int syscall_num = 0;
+    int oob_num = 0;
+    /* BazzAFL */
 
     if (shouldInstrumentBlock(F, &BB, DT, PDT, Options))
       BlocksToInstrument.push_back(&BB);
+
     for (auto &Inst : BB) {
+
+      /* BazzAFL */
+      // func_metric
+      if(CallInst* call_inst = dyn_cast<CallInst>(&Inst)) {
+        Function* fn = call_inst->getCalledFunction();
+        if(fn == NULL){
+          Value *v = call_inst->getCalledOperand();
+          fn = dyn_cast<Function>(v->stripPointerCasts());
+          if(fn == NULL)
+            continue;
+        }
+        std::string fn_name = std::string(fn->getName());
+        if(fn_name.compare(0, 5, "llvm.") == 0)
+          continue;
+        /* func_count */
+        if(is_syscall(fn_name)){
+          syscall_num++; 
+        }
+        /* func_count */
+
+        /* oom_size */
+        // Handle malloc
+        if (fn_name == "malloc" || 
+        fn_name == "valloc" || 
+        fn_name == "safemalloc" || 
+        fn_name == "safe_malloc" || 
+        fn_name == "safexmalloc") { 
+          IRBuilder<> irb_oom(call_inst->getNextNode());// Get a handle to the LLVM IR Builder at this point
+          if(Inst.getNextNode()==nullptr){
+            IRBuilder<> irb_oom(&Inst);
+          }
+          // auto irb_oom = insert_after(Inst); 
+          auto bytes = irb_oom.CreateTrunc(call_inst->getArgOperand(0), Int32Ty); // Cast size_t to int32
+          LoadInst *MBPtr = irb_oom.CreateLoad(AFLMapPtr);
+          // Load and update oom_size map
+          Constant *AFLOOMLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 16);
+          Value *AFLOOMPtr = irb_oom.CreateGEP(MBPtr, AFLOOMLoc);              
+          LoadInst *OOMCounter = irb_oom.CreateLoad(Int32Ty, AFLOOMPtr);
+          OOMCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *OOMIncr = irb_oom.CreateAdd(OOMCounter, bytes);
+          irb_oom.CreateStore(OOMIncr, AFLOOMPtr)
+              ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));   
+        
+          // irb_oom.CreateCall(oomIncrementFunction, {bytes}); 
+
+        } else if (fn_name == "calloc" || 
+        fn_name == "memalign" || 
+        fn_name == "aligned_alloc" || 
+        fn_name == "safe_calloc" || 
+        fn_name == "safecalloc" || 
+        fn_name == "safexcalloc") { // Handle calloc  
+          IRBuilder<> irb_oom(call_inst->getNextNode());// Get a handle to the LLVM IR Builder at this point
+          if(Inst.getNextNode()==nullptr){
+            IRBuilder<> irb_oom(&Inst);
+          }
+          // auto irb_oom = insert_after(Inst);
+          // auto bytes = irb_oom.CreateMul(Inst.getOperand(0), Inst.getOperand(1));
+          auto bytes = irb_oom.CreateTrunc(irb_oom.CreateMul(call_inst->getArgOperand(0), call_inst->getArgOperand(1)), Int32Ty); // multiply args to calloc to get total bytes
+          LoadInst *MBPtr = irb_oom.CreateLoad(AFLMapPtr);
+          MBPtr->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          // Load and update oom_size map
+          Constant *AFLOOMLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 16);
+          Value *AFLOOMPtr = irb_oom.CreateGEP(MBPtr, AFLOOMLoc);              
+          LoadInst *OOMCounter = irb_oom.CreateLoad(Int32Ty, AFLOOMPtr);
+          OOMCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *OOMIncr = irb_oom.CreateAdd(OOMCounter, bytes);
+          irb_oom.CreateStore(OOMIncr, AFLOOMPtr)
+              ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));       
+          
+          // irb_oom.CreateCall(oomIncrementFunction, {bytes});
+          
+        }else if (fn_name == "realloc") { // Handle realloc  
+          IRBuilder<> irb_oom(call_inst->getNextNode());// Get a handle to the LLVM IR Builder at this point
+          if(Inst.getNextNode()==nullptr){
+            IRBuilder<> irb_oom(&Inst);
+          }
+          // auto irb_oom = insert_after(Inst); 
+          auto bytes = irb_oom.CreateTrunc(call_inst->getArgOperand(1),Int32Ty);
+          LoadInst *MBPtr = irb_oom.CreateLoad(AFLMapPtr);
+          MBPtr->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          // Load and update oom_size map
+          Constant *AFLOOMLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 16);
+          Value *AFLOOMPtr = irb_oom.CreateGEP(MBPtr, AFLOOMLoc);              
+          LoadInst *OOMCounter = irb_oom.CreateLoad(Int32Ty, AFLOOMPtr);
+          OOMCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *OOMIncr = irb_oom.CreateAdd(OOMCounter, bytes);
+          irb_oom.CreateStore(OOMIncr, AFLOOMPtr)
+              ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C,                                                                                                                                                                                                                                                                                                                                                            None));              
+          // irb_oom.CreateCall(oomIncrementFunction, {bytes});
+        }else if (fn_name == "free" || 
+        fn_name == "cfree" || 
+        fn_name == "safe_free" || 
+        fn_name == "safefree" || 
+        fn_name == "safexfree"){ // Handle free
+          IRBuilder<> irb_oom(call_inst->getNextNode());// Get a handle to the LLVM IR Builder at this point
+          if(Inst.getNextNode()==nullptr){
+            IRBuilder<> irb_oom(&Inst);
+          }
+          // auto irb_oom = insert_after(Inst);
+          auto bytes = irb_oom.CreateTrunc(call_inst->getArgOperand(0),Int32Ty);
+          LoadInst *MBPtr = irb_oom.CreateLoad(AFLMapPtr);
+          MBPtr->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          // Load and update oom_size map
+          Constant *AFLOOMLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 16);
+          Value *AFLOOMPtr = irb_oom.CreateGEP(MBPtr, AFLOOMLoc);              
+          LoadInst *OOMCounter = irb_oom.CreateLoad(Int32Ty, AFLOOMPtr);
+          OOMCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *OOMIncr = irb_oom.CreateSub(OOMCounter, bytes);
+          irb_oom.CreateStore(OOMIncr, AFLOOMPtr)
+              ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));                
+          
+          // outs() << "free mem:" << *Inst.getOperand(0) << "\n";
+          // irb_oom.CreateCall(oomDecrementFunction, {bytes});
+        }else if(fn_name == "_Znwm" ||
+        fn_name == "_Znam" ||
+        fn_name == "_Znaj" || 
+        fn_name == "_Znwj"){// Handle new
+          IRBuilder<> irb_oom(call_inst->getNextNode());// Get a handle to the LLVM IR Builder at this point
+          if(Inst.getNextNode()==nullptr){
+            IRBuilder<> irb_oom(&Inst);
+          }
+          // auto irb_oom = insert_after(Inst); 
+          auto bytes = irb_oom.CreateTrunc(call_inst->getArgOperand(0), Int32Ty); // Cast size_t to int32
+          LoadInst *MBPtr = irb_oom.CreateLoad(AFLMapPtr);
+          MBPtr->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          // Load and update oom_size map
+          Constant *AFLOOMLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 16);
+          Value *AFLOOMPtr = irb_oom.CreateGEP(MBPtr, AFLOOMLoc);              
+          LoadInst *OOMCounter = irb_oom.CreateLoad(Int32Ty, AFLOOMPtr);
+          OOMCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *OOMIncr = irb_oom.CreateAdd(OOMCounter, bytes);
+          irb_oom.CreateStore(OOMIncr, AFLOOMPtr)
+              ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));   
+        }
+        
+      }else if(InvokeInst* invoke_inst = dyn_cast<InvokeInst>(&Inst)){
+
+        // some new Inst are in InvokeInst
+
+        // Function* fn = invoke_inst->getCalledFunction();
+        // if(fn == NULL){
+        //   Value *v = invoke_inst->getCalledValue();
+        //   fn = dyn_cast<Function>(v->stripPointerCasts());
+        //   if(fn == NULL)
+        //     continue;
+        // }
+        // std::string fn_name = fn->getName();
+        std::string fn_name = std::string(Inst.getOperand(1)->getName());
+        if(fn_name == "_Znwm" ||
+        fn_name == "_Znam" ||
+        fn_name == "_Znaj" || 
+        fn_name == "_Znwj"){// Handle new
+          IRBuilder<> irb_oom(invoke_inst->getNextNode());// Get a handle to the LLVM IR Builder at this point
+          if(Inst.getNextNode()==nullptr){
+            IRBuilder<> irb_oom(&Inst);
+          }
+          // auto irb_oom = insert_after(Inst); 
+          auto bytes = irb_oom.CreateTrunc(invoke_inst->getArgOperand(0), Int32Ty); // Cast size_t to int32
+          LoadInst *MBPtr = irb_oom.CreateLoad(AFLMapPtr);
+          MBPtr->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          // Load and update oom_size map
+          Constant *AFLOOMLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 16);
+          Value *AFLOOMPtr = irb_oom.CreateGEP(MBPtr, AFLOOMLoc);              
+          LoadInst *OOMCounter = irb_oom.CreateLoad(Int32Ty, AFLOOMPtr);
+          OOMCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *OOMIncr = irb_oom.CreateAdd(OOMCounter, bytes);
+          irb_oom.CreateStore(OOMIncr, AFLOOMPtr)
+              ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));   
+        }
+      }
+      /* oom_size */
+
+      /* oob quotient*/
+      BuilderTy irb_oob(Inst.getParent(), BasicBlock::iterator(&Inst), TargetFolder(DL));
+      if (LoadInst *LI = dyn_cast<LoadInst>(&Inst)) {
+        if (!LI->isVolatile()){
+          // outs() << "This is Load Inst!" << "\n";
+
+          SizeOffsetEvalType SizeOffset = ObjSizeEval.compute(LI->getPointerOperand());
+          if (!ObjSizeEval.bothKnown(SizeOffset)) {
+            continue;
+          }
+          Value *Size   = SizeOffset.first;
+          Value *Offset = SizeOffset.second;
+          Value* Size_Float = irb_oob.CreateUIToFP(Size, Type::getFloatTy(C));
+          Value* Offset_Float = irb_oob.CreateUIToFP(Offset, Type::getFloatTy(C));
+          Value* Quotient = irb_oob.CreateFDiv(Offset_Float, Size_Float);
+                    
+          LoadInst *MBFPtr = irb_oob.CreateLoad(AFLMapPtr);
+          MBFPtr->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));     
+          Constant *AFLOOBLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 24);
+          Value *AFLOOBPtr = irb_oob.CreateGEP(MBFPtr, AFLOOBLoc);                        
+          LoadInst *OOBFCounter = irb_oob.CreateLoad(FloatTy, AFLOOBPtr);
+          OOBFCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *OOBFIncr = irb_oob.CreateFAdd(OOBFCounter, Quotient);
+          irb_oob.CreateStore(OOBFIncr, AFLOOBPtr)
+              ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));        
+          // irb_oob.CreateCall(oobQuotientFunction, {Offset_Float, Size_Float}); 
+          oob_num++;
+          // irb_oob.CreateCall(oobNumFunction, {});
+        }
+      }
+      else if (StoreInst *SI = dyn_cast<StoreInst>(&Inst))
+      {
+        if (!SI->isVolatile()){
+          SizeOffsetEvalType SizeOffset = ObjSizeEval.compute(SI->getPointerOperand());
+          if (!ObjSizeEval.bothKnown(SizeOffset)) {
+            continue;
+          }
+          Value *Size   = SizeOffset.first;
+          Value *Offset = SizeOffset.second;
+          Value* Size_Float = irb_oob.CreateUIToFP(Size, Type::getFloatTy(C));
+          Value* Offset_Float = irb_oob.CreateUIToFP(Offset, Type::getFloatTy(C));
+          Value* Quotient = irb_oob.CreateFDiv(Offset_Float, Size_Float);
+
+          LoadInst *MBFPtr = irb_oob.CreateLoad(AFLMapPtr);
+          MBFPtr->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));     
+          Constant *AFLOOBLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 24);
+          Value *AFLOOBPtr = irb_oob.CreateGEP(MBFPtr, AFLOOBLoc);                        
+          LoadInst *OOBFCounter = irb_oob.CreateLoad(FloatTy, AFLOOBPtr);
+          OOBFCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *OOBFIncr = irb_oob.CreateFAdd(OOBFCounter, Quotient);
+          irb_oob.CreateStore(OOBFIncr, AFLOOBPtr)
+              ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));    
+          // irb_oob.CreateCall(oobQuotientFunction, {Offset_Float,Size_Float});
+          oob_num++;
+          // irb_oob.CreateCall(oobNumFunction, {});
+        }
+      }
+      else if (AtomicCmpXchgInst *AI = dyn_cast<AtomicCmpXchgInst>(&Inst))
+      {
+        if (!AI->isVolatile()){
+          // Or = getBoundsCheckCond(AI->getPointerOperand(), AI->getCompareOperand(),
+          //                       DL, TLI, ObjSizeEval, irb_oob, SE);
+          SizeOffsetEvalType SizeOffset = ObjSizeEval.compute(AI->getPointerOperand());
+          if (!ObjSizeEval.bothKnown(SizeOffset)) {
+            continue;
+          }
+          Value *Size   = SizeOffset.first;
+          Value *Offset = SizeOffset.second;
+          Value* Size_Float = irb_oob.CreateUIToFP(Size, Type::getFloatTy(C));
+          Value* Offset_Float = irb_oob.CreateUIToFP(Offset, Type::getFloatTy(C));
+          Value* Quotient = irb_oob.CreateFDiv(Offset_Float, Size_Float);
+
+          LoadInst *MBFPtr = irb_oob.CreateLoad(AFLMapPtr);
+          MBFPtr->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));     
+          Constant *AFLOOBLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 24);
+          Value *AFLOOBPtr = irb_oob.CreateGEP(MBFPtr, AFLOOBLoc);                        
+          LoadInst *OOBFCounter = irb_oob.CreateLoad(FloatTy, AFLOOBPtr);
+          OOBFCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *OOBFIncr = irb_oob.CreateFAdd(OOBFCounter, Quotient);
+          irb_oob.CreateStore(OOBFIncr, AFLOOBPtr)
+              ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));     
+          // irb_oob.CreateCall(oobQuotientFunction, {Offset_Float,Size_Float});
+          oob_num++;
+          // irb_oob.CreateCall(oobNumFunction, {});
+        }
+      }
+      else if (AtomicRMWInst *AI = dyn_cast<AtomicRMWInst>(&Inst))
+      {
+        if (!AI->isVolatile()){
+          // Or = getBoundsCheckCond(AI->getPointerOperand(), AI->getValOperand(),
+          //                         DL, TLI, ObjSizeEval, irb_oob, SE);
+          SizeOffsetEvalType SizeOffset = ObjSizeEval.compute(AI->getPointerOperand());
+          if (!ObjSizeEval.bothKnown(SizeOffset)) {
+            continue;
+          }
+          Value *Size   = SizeOffset.first;
+          Value *Offset = SizeOffset.second;
+          Value* Size_Float = irb_oob.CreateUIToFP(Size, Type::getFloatTy(C));
+          Value* Offset_Float = irb_oob.CreateUIToFP(Offset, Type::getFloatTy(C));
+          Value* Quotient = irb_oob.CreateFDiv(Offset_Float, Size_Float);
+
+          LoadInst *MBFPtr = irb_oob.CreateLoad(AFLMapPtr);
+          MBFPtr->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));     
+          Constant *AFLOOBLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 24);
+          Value *AFLOOBPtr = irb_oob.CreateGEP(MBFPtr, AFLOOBLoc);                        
+          LoadInst *OOBFCounter = irb_oob.CreateLoad(FloatTy, AFLOOBPtr);
+          OOBFCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+          Value *OOBFIncr = irb_oob.CreateFAdd(OOBFCounter, Quotient);
+          irb_oob.CreateStore(OOBFIncr, AFLOOBPtr)
+              ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));   
+          // irb_oob.CreateCall(oobQuotientFunction, {Offset_Float,Size_Float});
+          oob_num++;
+          // irb_oob.CreateCall(oobNumFunction, {});
+        }
+      }
+      /* oob quotient*/
+      
+      // bb_metric
+      if(Inst.mayReadFromMemory()){
+        mem_read_cnt++;
+        // outs() << "read mem Inst:" << Inst << "\n";
+      }
+
+      // bb_metric
+      if(Inst.mayWriteToMemory()){
+        mem_write_cnt++;
+        // outs() << "write mem Inst:" << Inst << "\n";
+      }
+      BasicBlock::iterator IP = BB.getFirstInsertionPt();
+      IRBuilder<> IRB(&(*IP));
+      LoadInst *MapPtr = IRB.CreateLoad(AFLMapPtr);
+      //Load and update mem read/write map 
+      if(mem_read_cnt > 0){
+
+        Constant *AFLMemReadLoc = ConstantInt::get(Int32Ty, MAP_SIZE);
+        Value *AFLMemReadPtr = IRB.CreateGEP(MapPtr, AFLMemReadLoc);
+
+        LoadInst *MemReadCount = IRB.CreateLoad(Int32Ty, AFLMemReadPtr);
+        MemReadCount->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+        Value *MemReadIncr = IRB.CreateAdd(MemReadCount, ConstantInt::get(Int32Ty, mem_read_cnt));
+        IRB.CreateStore(MemReadIncr, AFLMemReadPtr)
+            ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+      }
+      if(mem_write_cnt > 0){
+
+        Constant *AFLMemWriteLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 4);
+        Value *AFLMemWritePtr = IRB.CreateGEP(MapPtr, AFLMemWriteLoc);
+
+        LoadInst *MemWriteCount = IRB.CreateLoad(Int32Ty, AFLMemWritePtr);
+        MemWriteCount->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+        Value *MemWriteIncr = IRB.CreateAdd(MemWriteCount, ConstantInt::get(Int32Ty, mem_write_cnt));
+        IRB.CreateStore(MemWriteIncr, AFLMemWritePtr)
+            ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+      }
+      //Load and update syscall map 
+      if(syscall_num > 0){
+        Constant *AFLSyscallLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 8);
+        Value *AFLSyscallPtr = IRB.CreateGEP(MapPtr, AFLSyscallLoc);
+        
+        LoadInst *SyscallCounter = IRB.CreateLoad(Int32Ty, AFLSyscallPtr);
+        SyscallCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+        Value *SyscallIncr = IRB.CreateAdd(SyscallCounter, ConstantInt::get(Int32Ty, syscall_num));
+        IRB.CreateStore(SyscallIncr, AFLSyscallPtr)
+            ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+      }
+
+
+      //Load and update slow(total visited bb) map
+      Constant *AFLSlowLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 12);
+      Value *AFLSlowPtr = IRB.CreateGEP(MapPtr, AFLSlowLoc);
+      
+      LoadInst *SlowCounter = IRB.CreateLoad(Int32Ty, AFLSlowPtr);
+      SlowCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+      Value *SlowIncr = IRB.CreateAdd(SlowCounter, ConstantInt::get(Int32Ty, 1));
+      IRB.CreateStore(SlowIncr, AFLSlowPtr)
+          ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+
+      // Load and update oob_num map
+      if(oob_num > 0){
+        Constant *AFLOOBLoc = ConstantInt::get(Int32Ty, MAP_SIZE + 20);
+        Value *AFLOOBPtr = IRB.CreateGEP(MapPtr, AFLOOBLoc);
+        
+        LoadInst *OOBCounter = IRB.CreateLoad(Int32Ty, AFLOOBPtr);
+        OOBCounter->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));
+        Value *OOBIncr = IRB.CreateAdd(OOBCounter, ConstantInt::get(Int32Ty, oob_num));
+        IRB.CreateStore(OOBIncr, AFLOOBPtr)
+            ->setMetadata(M->getMDKindID("nosanitize"), MDNode::get(C, None));   
+      }
+      /* BazzAFL */
 
       if (Options.IndirectCalls) {
 

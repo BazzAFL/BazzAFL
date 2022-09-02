@@ -150,6 +150,7 @@ void afl_fsrv_init_dup(afl_forkserver_t *fsrv_to, afl_forkserver_t *from) {
 
 }
 
+
 /* Wrapper for select() and read(), reading a 32 bit var.
   Returns the time passed to read.
   If the wait times out, returns timeout_ms + 1;
@@ -232,7 +233,7 @@ restart_select:
 
 static void afl_fauxsrv_execv(afl_forkserver_t *fsrv, char **argv) {
 
-  unsigned char tmp[4] = {0, 0, 0, 0};
+  char tmp[4] = {0, 0, 0, 0};
   pid_t         child_pid;
 
   if (!be_quiet) { ACTF("Using Fauxserver:"); }
@@ -753,7 +754,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
             "print_suppressions=0",
             1);
 
-    fsrv->init_child_func(fsrv, argv);
+    fsrv->init_child_func(fsrv, argv);  // execv target BazzAFL Will not return
 
     /* Use a distinctive bitmap signature to tell the parent about execv()
        falling through. */
@@ -784,6 +785,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
 
   rlen = 0;
   if (fsrv->init_tmout) {
+
 
     u32 time_ms = read_s32_timed(fsrv->fsrv_st_fd, &status, fsrv->init_tmout,
                                  stop_soon_p);
@@ -917,7 +919,7 @@ void afl_fsrv_start(afl_forkserver_t *fsrv, char **argv,
               tmp_map_size, fsrv->map_size, tmp_map_size);
 
         }
-
+    
         fsrv->map_size = tmp_map_size;
 
       }
@@ -1472,6 +1474,8 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
   if (!fsrv->nyx_mode) {
 
     memset(fsrv->trace_bits, 0, fsrv->map_size);
+    /* BazzAFL */
+    memset(fsrv->extra_shm_ptr, 0, EXTRA_SHM);
     MEM_BARRIER();
 
   }
@@ -1536,6 +1540,8 @@ afl_fsrv_run_target(afl_forkserver_t *fsrv, u32 timeout,
 
   exec_ms = read_s32_timed(fsrv->fsrv_st_fd, &fsrv->child_status, timeout,
                            stop_soon_p);
+
+
 
   if (exec_ms > timeout) {
 

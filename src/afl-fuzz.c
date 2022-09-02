@@ -9,7 +9,7 @@
                         Andrea Fioraldi <andreafioraldi@gmail.com>
 
    Copyright 2016, 2017 Google Inc. All rights reserved.
-   Copyright 2019-2022 AFLplusplus Project. All rights reserved.
+   Copyright 2019-2022 AFLplusplus Project. All rights reserved.-
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -34,7 +34,6 @@
   #include <sys/ipc.h>
   #include <sys/shm.h>
 #endif
-
 #ifdef __APPLE__
   #include <sys/qos.h>
   #include <pthread/qos.h>
@@ -122,6 +121,9 @@ static void usage(u8 *argv0, int more_help) {
   SAYF(
       "\n%s [ options ] -- /path/to/fuzzed_app [ ... ]\n\n"
 
+      "Switch BazzAFL on:\n"
+      "  -z 4        - all 3 parts of BazzAFL are on \n"
+      "  -z 0        - just original AFL++ but a little difference \n"
       "Required parameters:\n"
       "  -i dir        - input directory with test cases\n"
       "  -o dir        - output directory for fuzzer findings\n\n"
@@ -295,8 +297,6 @@ static void usage(u8 *argv0, int more_help) {
       "AFL_STATSD_TAGS_FLAVOR: set statsd tags format (default: disable tags)\n"
       "                        Supported formats are: 'dogstatsd', 'librato',\n"
       "                        'signalfx' and 'influxdb'\n"
-      "AFL_SYNC_TIME: sync time between fuzzing instances (in minutes)\n"
-      "AFL_NO_CRASH_README: do not create a README in the crashes directory\n"
       "AFL_TESTCACHE_SIZE: use a cache for testcases, improves performance (in MB)\n"
       "AFL_TMPDIR: directory to use for input file generation (ramdisk recommended)\n"
       "AFL_EARLY_FORKSERVER: force an early forkserver in an afl-clang-fast/\n"
@@ -544,10 +544,62 @@ int main(int argc, char **argv_orig, char **envp) {
   while (
       (opt = getopt(
            argc, argv,
-           "+Ab:B:c:CdDe:E:hi:I:f:F:g:G:l:L:m:M:nNOo:p:RQs:S:t:T:UV:WXx:YZ")) >
+           "+Ab:B:c:CdDe:E:hi:I:f:F:g:G:l:L:m:M:nNOo:p:RQs:S:t:T:UV:WXx:YZz:")) >
       0) {
 
     switch (opt) {
+
+      case 'z': /* BazzAFL fuzzing */
+
+        if (sscanf(optarg, "%d", &afl->MB_switch) < 1 ||
+          optarg[0] == '-') FATAL("Bad syntax used for -z");
+
+        OKF("BazzAFL Switch Mode To : %d", afl->MB_switch);
+        switch (afl->MB_switch)
+        {
+        case 0:
+          OKF("**** Original AFL ****");
+          MB_Options.OriginalAFL = 1;
+          break;
+
+        case 1:
+          OKF("**** Schedule ****");
+          MB_Options.ScheduleEnabled = 1;
+          /* 
+            Since our method makes changes to the energy distribution, 
+            the seed group needs more initial energy to ensure that each seed energy is not too small.
+
+            You can also set a larger initial energy by '-p EXPLOIT' or just modify here 
+            to get enough exploration for each sub-seed.
+          */
+          afl->schedule = EXPLORE;
+          break;
+
+        case 2:
+          OKF("**** Energy ****");
+          MB_Options.EnergyEnabled = 1;
+          afl->schedule = EXPLORE;
+          break;
+
+        case 3:
+          OKF("**** Mutate ****");
+          MB_Options.MutateEnabled = 1;
+          afl->schedule = EXPLORE;
+          break;
+
+        case 4:
+          OKF("**** Schedule + Energy + Mutate ****");
+          MB_Options.EnergyEnabled = 1;
+          MB_Options.MutateEnabled = 1;
+          MB_Options.ScheduleEnabled = 1;
+          afl->schedule = EXPLORE;
+          // use_splicing = 1;
+          break;
+
+        default:
+          break;
+        }
+        break;
 
       case 'g':
         afl->min_length = atoi(optarg);
@@ -1652,7 +1704,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
   }
 
-  OKF("Generating fuzz data with a length of min=%u max=%u", afl->min_length,
+  OKF("Generating fuzz data with a a length of min=%u max=%u", afl->min_length,
       afl->max_length);
   u32 min_alloc = MAX(64U, afl->min_length);
   afl_realloc(AFL_BUF_PARAM(in_scratch), min_alloc);
@@ -2003,6 +2055,11 @@ int main(int argc, char **argv_orig, char **envp) {
   afl->fsrv.trace_bits =
       afl_shm_init(&afl->shm, afl->fsrv.map_size, afl->non_instrumented_mode);
 
+  /* BazzAFL */
+  afl->fsrv.extra_shm_ptr = (u32 *)(afl->fsrv.trace_bits + MAP_SIZE);
+  afl->fsrv.extra_shm_ptr_oob = (float *)(afl->fsrv.trace_bits + MAP_SIZE + 6 * EXTRA_SHM_UNIT);
+  /* BazzAFL */
+
   if (!afl->non_instrumented_mode && !afl->fsrv.qemu_mode &&
       !afl->unicorn_mode && !afl->fsrv.frida_mode && !afl->fsrv.cs_mode &&
       !afl->afl_env.afl_skip_bin_check) {
@@ -2218,6 +2275,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
   if (!afl->non_instrumented_mode) { write_stats_file(afl, 0, 0, 0, 0); }
   maybe_update_plot_file(afl, 0, 0, 0);
+  maybe_update_MB_record(afl);
   save_auto(afl);
 
   if (afl->stop_soon) { goto stop_fuzzing; }
@@ -2237,7 +2295,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
   u32 runs_in_current_cycle = (u32)-1;
   u32 prev_queued_items = 0;
-  u8  skipped_fuzz;
+  u8  skipped_fuzz =0;
 
   #ifdef INTROSPECTION
   char ifn[4096];
@@ -2252,6 +2310,409 @@ int main(int argc, char **argv_orig, char **envp) {
   OKF("Writing mutation introspection to '%s'", ifn);
   #endif
 
+  /* BazzAFL */
+  /* Seed Schedule */
+  MBQueue.P = g_queue_new();
+  MBQueue.R = g_queue_new();
+  MBQueue.D = g_queue_new();
+  MBQueue.N = g_queue_new();
+  RareFeatures = g_queue_new();
+
+  if (!MB_Options.OriginalAFL)
+  {
+    u32 n = afl->queued_items, i = 0;
+    struct queue_entry *q = afl->queue_buf[i];
+    for (i = 0; i < n; i++)
+    {
+      q = afl->queue_buf[i];
+      g_queue_push_tail(MBQueue.D, q);
+      q->q_rank = 2;
+      D_num++;
+    }
+    // printf("D_num:%d\n", D_num);
+    // TODO:Is the pointer q pushed into Gqueue or the whole seed struct?
+    queue_rank = -1;
+    afl->queue_cycle = 1;
+
+    while (likely(!afl->stop_soon)) {
+
+      cull_queue(afl);
+
+      /* BazzAFL */
+      // printf("P num :%u\n", g_queue_get_length(MBQueue.P));
+      if (g_queue_is_empty(MBQueue.P))
+      {
+        // printf("P is empty!\n");
+        supply_for_P(afl);
+      }
+      if (g_queue_is_empty(MBQueue.P))
+        continue; // if queue_P is still empty after supply,just skip and wait for next round of supply
+      /* BazzAFL */
+
+      if (unlikely((!afl->old_seed_selection &&
+                    runs_in_current_cycle > afl->queued_items) ||
+                  (afl->old_seed_selection && !afl->queue_cur))) {
+
+        if (unlikely((afl->last_sync_cycle < afl->queue_cycle ||
+                      (!afl->queue_cycle && afl->afl_env.afl_import_first)) &&
+                    afl->sync_id)) {
+
+          sync_fuzzers(afl);
+
+        }
+
+        ++afl->queue_cycle;
+        runs_in_current_cycle = (u32)-1;
+        afl->cur_skipped_items = 0;
+
+        // 1st april fool joke - enable pizza mode
+        // to not waste time on checking the date we only do this when the
+        // queue is fully cycled.
+        time_t     cursec = time(NULL);
+        struct tm *curdate = localtime(&cursec);
+        if (likely(!afl->afl_env.afl_pizza_mode)) {
+
+          if (unlikely(curdate->tm_mon == 3 && curdate->tm_mday == 1)) {
+
+            afl->pizza_is_served = 1;
+
+          } else {
+
+            afl->pizza_is_served = 0;
+
+          }
+
+        }
+
+        if (unlikely(afl->old_seed_selection)) {
+
+          afl->current_entry = 0;
+          while (unlikely(afl->current_entry < afl->queued_items &&
+                          afl->queue_buf[afl->current_entry]->disabled)) {
+
+            ++afl->current_entry;
+
+          }
+
+          if (afl->current_entry >= afl->queued_items) { afl->current_entry = 0; }
+
+          afl->queue_cur = afl->queue_buf[afl->current_entry];
+
+          if (unlikely(seek_to)) {
+
+            if (unlikely(seek_to >= afl->queued_items)) {
+
+              // This should never happen.
+              FATAL("BUG: seek_to location out of bounds!\n");
+
+            }
+
+            afl->current_entry = seek_to;
+            afl->queue_cur = afl->queue_buf[seek_to];
+            seek_to = 0;
+
+          }
+
+        }
+
+        if (unlikely(afl->not_on_tty)) {
+
+          ACTF("Entering queue cycle %llu.", afl->queue_cycle);
+          fflush(stdout);
+
+        }
+
+        /* If we had a full queue cycle with no new finds, try
+          recombination strategies next. */
+
+        if (unlikely(afl->queued_items == prev_queued
+                    /* FIXME TODO BUG: && (get_cur_time() - afl->start_time) >=
+                        3600 */
+                    )) {
+
+          if (afl->use_splicing) {
+
+            ++afl->cycles_wo_finds;
+
+            if (unlikely(afl->shm.cmplog_mode &&
+                        afl->cmplog_max_filesize < MAX_FILE)) {
+
+              afl->cmplog_max_filesize <<= 4;
+
+            }
+
+            switch (afl->expand_havoc) {
+
+              case 0:
+                // this adds extra splicing mutation options to havoc mode
+                afl->expand_havoc = 1;
+                break;
+              case 1:
+                // add MOpt mutator
+                /*
+                if (afl->limit_time_sig == 0 && !afl->custom_only &&
+                    !afl->python_only) {
+
+                  afl->limit_time_sig = -1;
+                  afl->limit_time_puppet = 0;
+
+                }
+
+                */
+                afl->expand_havoc = 2;
+                if (afl->cmplog_lvl && afl->cmplog_lvl < 2) afl->cmplog_lvl = 2;
+                break;
+              case 2:
+                // increase havoc mutations per fuzz attempt
+                afl->havoc_stack_pow2++;
+                afl->expand_havoc = 3;
+                break;
+              case 3:
+                // further increase havoc mutations per fuzz attempt
+                afl->havoc_stack_pow2++;
+                afl->expand_havoc = 4;
+                break;
+              case 4:
+                afl->expand_havoc = 5;
+                // if (afl->cmplog_lvl && afl->cmplog_lvl < 3) afl->cmplog_lvl =
+                // 3;
+                break;
+              case 5:
+                // nothing else currently
+                break;
+
+            }
+
+          } else {
+
+    #ifndef NO_SPLICING
+            afl->use_splicing = 1;
+    #else
+            afl->use_splicing = 0;
+    #endif
+
+          }
+
+        } else {
+
+          afl->cycles_wo_finds = 0;
+
+        }
+
+    #ifdef INTROSPECTION
+        fprintf(afl->introspection_file,
+                "CYCLE cycle=%llu cycle_wo_finds=%llu expand_havoc=%u queue=%u\n",
+                afl->queue_cycle, afl->cycles_wo_finds, afl->expand_havoc,
+                afl->queued_items);
+    #endif
+
+        if (afl->cycle_schedules) {
+
+          /* we cannot mix non-AFLfast schedules with others */
+
+          switch (afl->schedule) {
+
+            case EXPLORE:
+              afl->schedule = EXPLOIT;
+              break;
+            case EXPLOIT:
+              afl->schedule = MMOPT;
+              break;
+            case MMOPT:
+              afl->schedule = SEEK;
+              break;
+            case SEEK:
+              afl->schedule = EXPLORE;
+              break;
+            case FAST:
+              afl->schedule = COE;
+              break;
+            case COE:
+              afl->schedule = LIN;
+              break;
+            case LIN:
+              afl->schedule = QUAD;
+              break;
+            case QUAD:
+              afl->schedule = RARE;
+              break;
+            case RARE:
+              afl->schedule = FAST;
+              break;
+
+          }
+
+          // we must recalculate the scores of all queue entries
+          for (u32 i = 0; i < afl->queued_items; i++) {
+
+            if (likely(!afl->queue_buf[i]->disabled)) {
+
+              update_bitmap_score(afl, afl->queue_buf[i]);
+
+            }
+
+          }
+
+        }
+
+        prev_queued = afl->queued_items;
+
+      }
+
+      ++runs_in_current_cycle;
+
+      do {
+
+        if (likely(!afl->old_seed_selection)) {
+
+          if (unlikely(prev_queued_items < afl->queued_items ||
+                      afl->reinit_table)) {
+
+            // we have new queue entries since the last run, recreate alias table
+            prev_queued_items = afl->queued_items;
+            create_alias_table(afl);
+
+          }
+
+          afl->current_entry = select_next_queue_entry(afl);
+          afl->queue_cur = afl->queue_buf[afl->current_entry];
+
+        }
+
+        // pop s from P
+        // afl->queue_cur = (struct queue_entry *)g_queue_pop_head(MBQueue.P);
+        // printf("id:%u\n", afl->queue_cur->id);
+        // Make sure all the sub seeds are favored
+        if(afl->queue_cur->favored)
+        {
+          if(afl->queue_cur->func_seed)
+            afl->queue_cur->func_seed->favored = 1;
+          if(afl->queue_cur->ac_seed)
+            afl->queue_cur->ac_seed->favored = 1;
+          if(afl->queue_cur->oom_seed)
+            afl->queue_cur->oom_seed->favored = 1;
+          if(afl->queue_cur->oob_seed)
+            afl->queue_cur->oob_seed->favored = 1;
+        }
+
+        queue_temp = afl->queue_cur;   // need a temp ptr to set queue_cur back to master queue,though seems no use in this situation
+        // cur_seed_type = choose_seed_rand();
+        
+        u8 skip_sub_seed = 0;
+        cur_seed_type = 0;
+        UpdateCorpusDistribution(afl,queue_temp); // Use Entropic to update and assign energy to the seed in group
+        while (cur_seed_type < 5)
+        {
+          switch (cur_seed_type)
+          {
+            case 0:
+              afl->queue_cur = queue_temp;
+              break;
+            case 1:
+              if(queue_temp->func_seed){
+                afl->queue_cur = queue_temp->func_seed;
+              }else
+                skip_sub_seed = 1;
+              break;
+            case 2:
+              if(queue_temp->ac_seed){
+                afl->queue_cur = queue_temp->ac_seed;
+              }else
+                skip_sub_seed = 1;
+              break;
+            case 3:
+              if(queue_temp->oom_seed){
+                afl->queue_cur = queue_temp->oom_seed;
+              }else
+                skip_sub_seed = 1;
+              break;
+            case 4:
+              if(queue_temp->oob_seed){
+                afl->queue_cur = queue_temp->oob_seed;
+              }else
+                skip_sub_seed = 1;
+              break;
+            default:
+              break;
+          }
+          if(skip_sub_seed){
+            skip_sub_seed = 0;
+          }else{
+
+            skipped_fuzz = fuzz_one(afl);
+
+            if (unlikely(!afl->stop_soon && exit_1)) { afl->stop_soon = 2; }
+
+            if (unlikely(afl->old_seed_selection)) {
+
+              while (++afl->current_entry < afl->queued_items &&
+                    afl->queue_buf[afl->current_entry]->disabled)
+                ;
+              if (unlikely(afl->current_entry >= afl->queued_items ||
+                          afl->queue_buf[afl->current_entry] == NULL ||
+                          afl->queue_buf[afl->current_entry]->disabled))
+                afl->queue_cur = NULL;
+              else
+                afl->queue_cur = afl->queue_buf[afl->current_entry];
+
+            }
+
+          }
+          cur_seed_type++;
+        }
+
+        afl->queue_cur = queue_temp;
+        /* BazzAFL */
+
+      } while (skipped_fuzz && afl->queue_cur && !afl->stop_soon);
+
+      if (likely(!afl->stop_soon && afl->sync_id)) {
+
+        if (likely(afl->skip_deterministic)) {
+
+          if (unlikely(afl->is_main_node)) {
+
+            if (unlikely(get_cur_time() >
+                        (SYNC_TIME >> 1) + afl->last_sync_time)) {
+
+              if (!(sync_interval_cnt++ % (SYNC_INTERVAL / 3))) {
+
+                sync_fuzzers(afl);
+
+              }
+
+            }
+
+          } else {
+
+            if (unlikely(get_cur_time() > SYNC_TIME + afl->last_sync_time)) {
+
+              if (!(sync_interval_cnt++ % SYNC_INTERVAL)) { sync_fuzzers(afl); }
+
+            }
+
+          }
+
+        } else {
+
+          sync_fuzzers(afl);
+
+        }
+
+      }
+      /* BazzAFL */
+      // push s into R
+      if(afl->queue_cur)
+      {
+        afl->queue_cur->q_rank = 8;
+        g_queue_push_tail(MBQueue.R, afl->queue_cur);
+      }
+
+      // ++afl->current_entry;
+    }
+
+  }else
+  {
   while (likely(!afl->stop_soon)) {
 
     cull_queue(afl);
@@ -2473,7 +2934,7 @@ int main(int argc, char **argv_orig, char **envp) {
       if (likely(!afl->old_seed_selection)) {
 
         if (unlikely(prev_queued_items < afl->queued_items ||
-                     afl->reinit_table)) {
+                    afl->reinit_table)) {
 
           // we have new queue entries since the last run, recreate alias table
           prev_queued_items = afl->queued_items;
@@ -2493,11 +2954,11 @@ int main(int argc, char **argv_orig, char **envp) {
       if (unlikely(afl->old_seed_selection)) {
 
         while (++afl->current_entry < afl->queued_items &&
-               afl->queue_buf[afl->current_entry]->disabled)
+              afl->queue_buf[afl->current_entry]->disabled)
           ;
         if (unlikely(afl->current_entry >= afl->queued_items ||
-                     afl->queue_buf[afl->current_entry] == NULL ||
-                     afl->queue_buf[afl->current_entry]->disabled))
+                    afl->queue_buf[afl->current_entry] == NULL ||
+                    afl->queue_buf[afl->current_entry]->disabled))
           afl->queue_cur = NULL;
         else
           afl->queue_cur = afl->queue_buf[afl->current_entry];
@@ -2506,6 +2967,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
     } while (skipped_fuzz && afl->queue_cur && !afl->stop_soon);
 
+
     if (likely(!afl->stop_soon && afl->sync_id)) {
 
       if (likely(afl->skip_deterministic)) {
@@ -2513,7 +2975,7 @@ int main(int argc, char **argv_orig, char **envp) {
         if (unlikely(afl->is_main_node)) {
 
           if (unlikely(get_cur_time() >
-                       (afl->sync_time >> 1) + afl->last_sync_time)) {
+                       (SYNC_TIME >> 1) + afl->last_sync_time)) {
 
             if (!(sync_interval_cnt++ % (SYNC_INTERVAL / 3))) {
 
@@ -2525,7 +2987,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
         } else {
 
-          if (unlikely(get_cur_time() > afl->sync_time + afl->last_sync_time)) {
+          if (unlikely(get_cur_time() > SYNC_TIME + afl->last_sync_time)) {
 
             if (!(sync_interval_cnt++ % SYNC_INTERVAL)) { sync_fuzzers(afl); }
 
@@ -2541,6 +3003,7 @@ int main(int argc, char **argv_orig, char **envp) {
 
     }
 
+  }
   }
 
 stop_fuzzing:
@@ -2617,8 +3080,30 @@ stop_fuzzing:
 
   if (frida_afl_preload) { ck_free(frida_afl_preload); }
 
+  fprintf(MB_record, "\n\nDone here!\n Max func count: %u\n Max oom size :%u\n Max ac count :%u\n Max oob total :%f\n ",max_func_count_global,max_oom_size_global,max_ac_count_global,max_oob_total_global); /* ignore errors */
+  fflush(MB_record);
+  fclose(MB_record);
+
   fclose(afl->fsrv.plot_file);
   destroy_queue(afl);
+
+  // delete replaced sub seed
+  for(u32 k = 0;k < delete_num;k++)
+  {
+    if(remove(delete_buf[k]->fname)){
+      FATAL("Unable to delete replaced sub seed!");
+    }
+    destroy_sub_seed(delete_buf[k]);
+  }
+
+
+  /* BazzAFL */
+  g_queue_free(RareFeatures);
+  g_queue_free(MBQueue.P);
+  g_queue_free(MBQueue.N);
+  g_queue_free(MBQueue.R);
+  g_queue_free(MBQueue.D);
+
   destroy_extras(afl);
   destroy_custom_mutators(afl);
   afl_shm_deinit(&afl->shm);
@@ -2646,9 +3131,7 @@ stop_fuzzing:
   if (afl->q_testcase_cache) { ck_free(afl->q_testcase_cache); }
   afl_state_deinit(afl);
   free(afl);                                                 /* not tracked */
-
   argv_cpy_free(argv);
-
   alloc_report();
 
   OKF("We're done here. Have a nice day!\n");

@@ -27,6 +27,7 @@
 #include <ctype.h>
 #include <math.h>
 
+
 /* select next queue entry based on alias algo - fast! */
 
 inline u32 select_next_queue_entry(afl_state_t *afl) {
@@ -58,6 +59,16 @@ double compute_weight(afl_state_t *afl, struct queue_entry *q,
   if (likely(afl->schedule < RARE)) { weight *= (avg_exec_us / q->exec_us); }
   weight *= (log(q->bitmap_size) / avg_bitmap_size);
   weight *= (1 + (q->tc_ref / avg_top_size));
+
+  /* BazzAFL */
+  if(MB_Options.ScheduleEnabled)
+  {
+    if(unlikely(!q->q_rank))
+      ACTF("Not in MultiLevel Queue!");
+    weight /= (q->q_rank ? q->q_rank : 1);
+  }
+
+  
   if (unlikely(q->favored)) { weight *= 5; }
   if (unlikely(!q->was_fuzzed)) { weight *= 2; }
 
@@ -529,6 +540,26 @@ void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) {
   q->testcase_buf = NULL;
   q->mother = afl->queue_cur;
 
+  /* BazzAFL */
+  q->func_seed = NULL;
+  q->ac_seed = NULL;
+  q->oom_seed = NULL;
+  q->oob_seed = NULL;
+  q->seed_type = 0;
+  q->NeedsEnergyUpdate = 0;
+  for (int i = 0; i < 4;i++)
+  {
+    q->feature_metric[i] = g_hash_table_new(g_direct_hash, g_direct_equal);
+    q->key_byte[i] = g_queue_new();
+  }
+  // int NumberOfRareFeatures =g_queue_get_length(RareFeatures);
+  int NumberOfRareFeatures = 0;
+  q->feature_edge = g_hash_table_new(g_direct_hash, g_direct_equal);
+  q->Energy = (NumberOfRareFeatures + afl->queued_items  == 0) ? 1.0 : (float)log(NumberOfRareFeatures + afl->queued_items );
+  q->NumExecutedMutations = 0;
+  q->SumIncidence = NumberOfRareFeatures + afl->queued_items ;
+  /* BazzAFL */  
+
 #ifdef INTROSPECTION
   q->bitsmap_size = afl->bitsmap_size;
 #endif
@@ -575,7 +606,99 @@ void add_to_queue(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) {
   /* only redqueen currently uses is_ascii */
   if (afl->shm.cmplog_mode) q->is_ascii = check_if_text(afl, q);
 
+  last_ac_time = get_cur_time();
+  last_func_time = get_cur_time();
+  last_oom_time = get_cur_time();
+  last_oob_time = get_cur_time();
 }
+
+void add_to_queue_MB(afl_state_t *afl, u8 *fname, u32 len, u8 passed_det) {
+
+  struct queue_entry *q = ck_alloc(sizeof(struct queue_entry));
+
+  q->fname = fname;
+  q->len = len;
+  q->depth = afl->cur_depth + 1;
+  q->passed_det = passed_det;
+  q->trace_mini = NULL;
+  q->testcase_buf = NULL;
+  q->mother = afl->queue_cur;
+
+  /* BazzAFL */
+  q->func_seed = NULL;
+  q->ac_seed = NULL;
+  q->oom_seed = NULL;
+  q->oob_seed = NULL;
+  q->seed_type = 0;
+  for (int i = 0; i < 4;i++)
+  {
+    q->feature_metric[i] = g_hash_table_new(g_direct_hash, g_direct_equal);
+    q->key_byte[i] = g_queue_new();
+  }
+  q->feature_edge = g_hash_table_new(g_direct_hash, g_direct_equal);
+  int NumberOfRareFeatures = g_queue_get_length(RareFeatures);
+  q->Energy = (NumberOfRareFeatures+afl->queued_items == 0) ? 1.0 : (float)log(NumberOfRareFeatures+afl->queued_items);
+
+  q->SumIncidence = NumberOfRareFeatures+afl->queued_items;
+  q->NumExecutedMutations = 0;
+  q->NeedsEnergyUpdate = 0;
+  /* BazzAFL */  
+#ifdef INTROSPECTION
+  q->bitsmap_size = afl->bitsmap_size;
+#endif
+
+  if (q->depth > afl->max_depth) { afl->max_depth = q->depth; }
+
+  if (afl->queue_top) {
+
+    afl->queue_top = q;
+
+  } else {
+
+    afl->queue = afl->queue_top = q;
+
+  }
+
+  /* BazzAFL */
+  q->q_rank = 4;
+  g_queue_push_tail(MBQueue.N, q);
+
+  /* BazzAFL */
+
+  if (likely(q->len > 4)) afl->ready_for_splicing_count++;
+
+  ++afl->queued_items;
+  ++afl->active_items;
+  ++afl->pending_not_fuzzed;
+
+  afl->cycles_wo_finds = 0;
+
+  struct queue_entry **queue_buf = afl_realloc(
+      AFL_BUF_PARAM(queue), afl->queued_items * sizeof(struct queue_entry *));
+  if (unlikely(!queue_buf)) { PFATAL("alloc"); }
+  queue_buf[afl->queued_items - 1] = q;
+  q->id = afl->queued_items - 1;
+
+  afl->last_find_time = get_cur_time();
+
+  if (afl->custom_mutators_count) {
+
+    /* At the initialization stage, queue_cur is NULL */
+    if (afl->queue_cur && !afl->syncing_party) {
+
+      run_afl_custom_queue_new_entry(afl, q, fname, afl->queue_cur->fname);
+
+    }
+
+  }
+
+  /* only redqueen currently uses is_ascii */
+  if (afl->shm.cmplog_mode) q->is_ascii = check_if_text(afl, q);
+
+}
+
+
+/* BazzAFL */
 
 /* Destroy the entire queue. */
 
@@ -586,10 +709,27 @@ void destroy_queue(afl_state_t *afl) {
   for (i = 0; i < afl->queued_items; i++) {
 
     struct queue_entry *q;
-
     q = afl->queue_buf[i];
+
     ck_free(q->fname);
     ck_free(q->trace_mini);
+
+    /* BazzAFL */
+    g_hash_table_destroy(q->feature_edge);
+    for (int i = 0; i < 4;i++)
+    {
+      g_hash_table_destroy(q->feature_metric[i]);
+      g_queue_free(q->key_byte[i]);
+    }
+    if(q->func_seed)
+      destroy_sub_seed(q->func_seed);
+    if(q->ac_seed)
+      destroy_sub_seed(q->ac_seed);
+    if(q->oom_seed)
+      destroy_sub_seed(q->oom_seed);
+    if(q->oob_seed)
+      destroy_sub_seed(q->oob_seed);
+
     ck_free(q);
 
   }
