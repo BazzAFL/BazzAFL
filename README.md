@@ -44,6 +44,17 @@ For example
     make -j
     cp tools/tiffsplit ../tiffsplit/    
 ```
+or 
+
+```bash
+    cd testbazz
+    tar -xvf lame-3.99.5.tar.gz
+    cd lame-3.99.5
+    ./configure --disable-shared
+    make -j
+    cp frontend/lame ../tiffsplit/    
+```
+
 If you want to try BazzAFL on a new program, 
 1. Compile the new program from source code using BazzAFL/afl-clang-fast or BazzAFL/afl-clang-fast++
 2. Prepare appropriate input files
@@ -52,15 +63,22 @@ If you want to try BazzAFL on a new program,
 ## Running BazzAFL
 
 ```bash
+    cd testbazz/tiffsplit
     bash prepare.sh
-    ./afl-fuzz -i in -z 4 -o out ./tiffsplit @@ # set AFL_NO_UI=1 is recommended
+    ./afl-fuzz -i in_tif -z 4 -o out ./tiffsplit @@ # set AFL_NO_UI=1 is recommended
+```
+or 
+```bash
+    cd testbazz/lame
+    bash prepare.sh
+    ./afl-fuzz -i in_wav -z 4 -o out ./lame @@ /dev/null # set AFL_NO_UI=1 is recommended
+```
     # -z --switch of BazzAFL
     # 0 = original AFL++ without any of BazzAFL's optimization on
     # 4 = all three components of BazzAFL are on 
-```
+
 PS:In order to improve the efficiency of BazzAFL, the Explore mode is used by default when using the -z option to prevent the total energy of the seed groups too small
 
 ## Analyze 
 
 - You can always view the process of BazzAFL in the `plot_data`(by aflpp) and `mb_record` log files, and also observe the generation of the subseeds in the subseeds folder(replaced subseed will be deleted and free at the end of fuzzing in case sth uncertain happens)
-
