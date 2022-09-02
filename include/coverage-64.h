@@ -79,7 +79,7 @@ inline void discover_word(u8 *ret, u64 *current, u64 *virgin) {
   /* Optimize for (*current & *virgin) == 0 - i.e., no bits in current bitmap
      that have not been already cleared from the virgin map - since this will
      almost always be the case. */
-
+  u32 begin = 0;
   if (*current & *virgin) {
 
     if (likely(*ret < 2)) {
@@ -90,13 +90,48 @@ inline void discover_word(u8 *ret, u64 *current, u64 *virgin) {
       /* Looks like we have not found any new bytes yet; see if any non-zero
          bytes in current[] are pristine in virgin[]. */
 
-      if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
-          (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff) ||
-          (cur[4] && vir[4] == 0xff) || (cur[5] && vir[5] == 0xff) ||
-          (cur[6] && vir[6] == 0xff) || (cur[7] && vir[7] == 0xff))
+      // if ((cur[0] && vir[0] == 0xff) || (cur[1] && vir[1] == 0xff) ||
+      //     (cur[2] && vir[2] == 0xff) || (cur[3] && vir[3] == 0xff) ||
+      //     (cur[4] && vir[4] == 0xff) || (cur[5] && vir[5] == 0xff) ||
+      //     (cur[6] && vir[6] == 0xff) || (cur[7] && vir[7] == 0xff))
+      //   *ret = 2;
+      // else
+      //   *ret = 1;
+
+      *ret = 1;
+      if(cur[0] && vir[0] == 0xff){
+        NewFeatureId[(begin << 3)] = 1;
         *ret = 2;
-      else
-        *ret = 1;
+      }
+      if(cur[1] && vir[1] == 0xff){
+        NewFeatureId[(begin << 3) + 1] = 1;
+        *ret = 2;
+      }
+      if(cur[2] && vir[2] == 0xff){
+        NewFeatureId[(begin << 3) + 2] = 1;
+        *ret = 2;
+      }
+      if(cur[3] && vir[3] == 0xff){
+        NewFeatureId[(begin << 3) + 3] = 1;
+        *ret = 2;
+      }
+      if(cur[4] && vir[4] == 0xff){
+        NewFeatureId[(begin << 3) + 4] = 1;
+        *ret = 2;
+      }
+      if(cur[5] && vir[5] == 0xff){
+        NewFeatureId[(begin << 3) + 5] = 1;
+        *ret = 2;
+      }
+      if(cur[6] && vir[6] == 0xff){
+        NewFeatureId[(begin << 3) + 6] = 1;
+        *ret = 2;
+      }
+      if(cur[7] && vir[7] == 0xff){
+        NewFeatureId[(begin << 3) + 7] = 1;
+        *ret = 2;
+      }
+      /* BazzAFL */
 
     }
 

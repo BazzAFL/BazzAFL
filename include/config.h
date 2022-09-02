@@ -26,7 +26,7 @@
 /* Version string: */
 
 // c = release, a = volatile github dev, e = experimental branch
-#define VERSION "++4.01c"
+#define VERSION "++4.01a"
 
 /******************************************************
  *                                                    *
@@ -505,6 +505,10 @@
 /* Maximum mutations on a string */
 
 #define AFL_TXT_STRING_MAX_MUTATIONS 6
+
+/* BazzAFL */
+#define EXTRA_SHM_UNIT 4
+#define EXTRA_SHM  (7*EXTRA_SHM_UNIT) //read/write *2,func*1,ac*1,oom*1,oob*2;
 
 #endif                                                  /* ! _HAVE_CONFIG_H */
 

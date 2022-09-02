@@ -36,7 +36,7 @@
 #ifndef _FILE_OFFSET_BITS
   #define _FILE_OFFSET_BITS 64
 #endif
-
+#include <glib.h>
 #include "config.h"
 #include "types.h"
 #include "debug.h"
@@ -193,6 +193,50 @@ struct queue_entry {
 
   struct queue_entry *mother;           /* queue entry this based on        */
 
+  /* BazzAFL */
+  u8 seed_type;
+  u32 func_count;                     /* func count(single seed)          */
+  u32 ac_count;                       /* ac count(single seed)            */
+  u32 oom_size;                       /* oom size(single seed)            */
+  // float oob_quotient;
+  // u32 oob_num;
+  float oob_total;                    /* oom_total=quotient/num           */
+
+  u32 max_func_count;                 /* max func count in whcih(4 seeds) */
+  u32 max_ac_count;                   /* max ac count in whcih(4 seeds)   */
+  u32 max_oom_size;                   /* max oom size in whcih(4 seeds)   */
+  float max_oob_total;
+
+  struct queue_entry *func_seed,      /* ptr to its sub seed              */
+                     *oom_seed,
+                     *oob_seed,
+                     *ac_seed,
+                     *master_seed;
+
+  int rank;
+  int q_rank;
+  // u32 id;
+
+  /* Entropic */
+
+  GHashTable  *feature_edge;
+  GHashTable  *feature_metric[4];
+  
+  // int FeatureFreqsSize;
+  u8 NeedsEnergyUpdate;
+  float Energy;
+  int SumIncidence;
+  int NumExecutedMutations;
+  /* Entropic */
+
+  /* Mutate */
+  // u32 *key_byte[4];     // 0-255 value that maxmize seed_type metric,10000 is max len of input
+  int key_byte_num[4];
+  GQueue* key_byte[4];
+
+  /* Mutate */
+  /* BazzAFL */
+
 };
 
 struct extra_data {
@@ -230,13 +274,12 @@ enum {
   /* 12 */ STAGE_EXTRAS_UO,
   /* 13 */ STAGE_EXTRAS_UI,
   /* 14 */ STAGE_EXTRAS_AO,
-  /* 15 */ STAGE_EXTRAS_AI,
-  /* 16 */ STAGE_HAVOC,
-  /* 17 */ STAGE_SPLICE,
-  /* 18 */ STAGE_PYTHON,
-  /* 19 */ STAGE_CUSTOM_MUTATOR,
-  /* 20 */ STAGE_COLORIZATION,
-  /* 21 */ STAGE_ITS,
+  /* 15 */ STAGE_HAVOC,
+  /* 16 */ STAGE_SPLICE,
+  /* 17 */ STAGE_PYTHON,
+  /* 18 */ STAGE_CUSTOM_MUTATOR,
+  /* 19 */ STAGE_COLORIZATION,
+  /* 20 */ STAGE_ITS,
 
   STAGE_NUM_MAX
 
@@ -386,7 +429,7 @@ typedef struct afl_env_vars {
       afl_bench_until_crash, afl_debug_child, afl_autoresume, afl_cal_fast,
       afl_cycle_schedules, afl_expand_havoc, afl_statsd, afl_cmplog_only_new,
       afl_exit_on_seed_issues, afl_try_affinity, afl_ignore_problems,
-      afl_keep_timeouts, afl_pizza_mode, afl_no_crash_readme;
+      afl_pizza_mode;
 
   u8 *afl_tmpdir, *afl_custom_mutator_library, *afl_python_module, *afl_path,
       *afl_hang_tmout, *afl_forksrv_init_tmout, *afl_preload,
@@ -577,8 +620,7 @@ typedef struct afl_state {
       last_find_time,                   /* Time for most recent path (ms)   */
       last_crash_time,                  /* Time for most recent crash (ms)  */
       last_hang_time,                   /* Time for most recent hang (ms)   */
-      exit_on_time,                     /* Delay to exit if no new paths    */
-      sync_time;                        /* Sync time (ms)                   */
+      exit_on_time;                     /* Delay to exit if no new paths    */
 
   u32 slowest_exec_ms,                  /* Slowest testcase non hang in ms  */
       subseq_tmouts;                    /* Number of timeouts in a row      */
@@ -764,6 +806,9 @@ typedef struct afl_state {
   FILE *introspection_file;
   u32   bitsmap_size;
 #endif
+
+  /* BazzAFL */
+  int MB_switch;                 /* Switch of BazzAFL              */
 
 } afl_state_t;
 
@@ -1040,6 +1085,10 @@ void mark_as_det_done(afl_state_t *, struct queue_entry *);
 void mark_as_variable(afl_state_t *, struct queue_entry *);
 void mark_as_redundant(afl_state_t *, struct queue_entry *, u8);
 void add_to_queue(afl_state_t *, u8 *, u32, u8);
+
+/* BazzAFL */
+void add_to_queue_MB(afl_state_t *, u8 *, u32, u8);
+
 void destroy_queue(afl_state_t *);
 void update_bitmap_score(afl_state_t *, struct queue_entry *);
 void cull_queue(afl_state_t *);
@@ -1085,6 +1134,13 @@ void load_stats_file(afl_state_t *);
 void write_setup_file(afl_state_t *, u32, char **);
 void write_stats_file(afl_state_t *, u32, double, double, double);
 void maybe_update_plot_file(afl_state_t *, u32, double, double);
+
+/* BazzAFL */
+
+void maybe_update_MB_record(afl_state_t *afl);
+
+/* BazzAFL */
+
 void show_stats(afl_state_t *);
 void show_stats_normal(afl_state_t *);
 void show_stats_pizza(afl_state_t *);
@@ -1100,7 +1156,7 @@ int  statsd_format_metric(afl_state_t *afl, char *buff, size_t bufflen);
 /* Run */
 
 void sync_fuzzers(afl_state_t *);
-u32  write_to_testcase(afl_state_t *, void **, u32, u32);
+u32  write_to_testcase(afl_state_t *, void *, u32, u32);
 u8   calibrate_case(afl_state_t *, struct queue_entry *, u8 *, u32, u8);
 u8   trim_case(afl_state_t *, struct queue_entry *, u8 *);
 u8   common_fuzz_stuff(afl_state_t *, u8 *, u32);
@@ -1194,6 +1250,64 @@ static inline u32 rand_below(afl_state_t *afl, u32 limit) {
 
 }
 
+/* BazzAFL */
+static inline u32 rand_below_MB(afl_state_t *afl, u32 limit, u8 seed_type) {
+
+  if (limit <= 1) return 0;
+
+  /* The boundary not being necessarily a power of 2,
+     we need to ensure the result uniformity. */
+  if (unlikely(!afl->rand_cnt--) && likely(!afl->fixed_seed)) {
+
+    ck_read(afl->fsrv.dev_urandom_fd, &afl->rand_seed, sizeof(afl->rand_seed),
+            "/dev/urandom");
+    // srandom(afl->rand_seed[0]);
+    afl->rand_cnt = (RESEED_RNG / 2) + (afl->rand_seed[1] % RESEED_RNG);
+
+  }
+
+  /* Modulo is biased - we don't want our fuzzing to be biased so let's do it
+   right. See:
+   https://stackoverflow.com/questions/10984974/why-do-people-say-there-is-modulo-bias-when-using-a-random-number-generator
+   */
+  u64 unbiased_rnd;
+  do {
+
+    unbiased_rnd = rand_next(afl);
+
+  } while (unlikely(unbiased_rnd >= (UINT64_MAX - (UINT64_MAX % limit))));
+
+  if(!seed_type)
+  {
+    return unbiased_rnd % limit;
+  }else{
+    if(unbiased_rnd % 5){
+      return unbiased_rnd % limit; // 20% will use original rand_below
+    }else{
+      u32 ret = 0;
+      u8 seed = seed_type - 1;
+      u32 key_byte_num = g_queue_get_length(afl->queue_cur->key_byte[seed]);
+      u32 key_byte_cont = key_byte_num;
+      if (!key_byte_num)
+      {
+        return unbiased_rnd % limit;
+      }
+      u32 key_byte_num_index = 0;
+      do {
+        key_byte_cont--;
+        key_byte_num_index = unbiased_rnd % key_byte_num;
+        ret = *(u32 *)g_queue_peek_nth(afl->queue_cur->key_byte[seed], key_byte_num_index);
+      } while (unlikely(ret > limit) && key_byte_cont);
+      return ret;
+    }
+  }
+
+  return unbiased_rnd % limit;
+
+}
+/* BazzAFL */
+
+
 /* we prefer lower range values here */
 /* this is only called with normal havoc, not MOpt, to have an equalizer for
    expand havoc mode */
@@ -1266,5 +1380,132 @@ void queue_testcase_store_mem(afl_state_t *afl, struct queue_entry *q, u8 *mem);
   #error define of TESTCASE_CACHE must be zero or larger than 1
 #endif
 
-#endif
+/* BazzAFL */
+struct 
+{
+  u8 ScheduleEnabled;
+  u8 EnergyEnabled;
+  u8 MutateEnabled;
+  u8 OriginalAFL;
+} MB_Options;
 
+typedef struct 
+{
+  float Energy;
+  int SumIncidence;
+} EnergyUnit;
+extern FILE* MB_record;
+extern struct queue_entry *delete_buf[10000];
+extern u32 delete_num;
+/* Entropic */
+extern GQueue* RareFeatures;
+extern int MaxNumberOfRarestFeatures;
+extern int FreqOfMostAbundantRareFeature;
+extern int FeatureFrequencyThreshold;
+extern u16 GlobalFeatureFreqs[MAP_SIZE];
+extern int Delete;
+extern int MostAbundantRareFeatureIndices[2];
+extern u8 DistributionNeedsUpdate; // If the InputCorpus needs update energy
+extern double Weights[5];
+extern u8 NewFeatureId[MAP_SIZE];
+extern float EnergyMaxEdge;
+extern float EnergyMinEdge;
+extern float EnergyMaxMetric[4];
+extern float EnergyMinMetric[4];
+extern int RareFeatureNum ;
+
+/* Entropic */
+/* BazzAFL */
+
+extern u64 last_ac_time,
+           last_func_time,
+           last_oom_time,
+           last_oob_time;
+extern u32 NumberOfSubSeed[4];
+
+// const char s[2] = "/";
+
+extern struct queue_entry *queue_temp;
+
+/* Part.0 Multibugs Metric Related */
+#define SeedType 5
+extern u32 max_func_count_global;  // global max func count
+extern u32 max_ac_count_global;   // global max ac count
+extern u32 max_oom_size_global;   // global max oom size
+extern float max_oob_total_global;   // global max oom size
+extern int cur_seed_type;      // current selected seed type 
+extern u8 mb_check_ret[SeedType - 1];
+extern char* mb_dir_name[SeedType];
+
+/* Seed Types */
+// extern enum {
+//   /* 00 */ SEED_PATH,
+//   /* 01 */ SEED_FUNC,
+//   /* 02 */ SEED_AC,
+//   /* 03 */ SEED_OOM,
+//   /* 04 */ SEED_OOB,
+// };
+/* Part.1 Seed Priorization */
+extern int queue_rank;
+extern u32 P_num, N_num, D_num, R_num;     /* Number of each seed corp         */
+extern u8 compare_level, has_winner, exit_flag;
+extern int NumInQueue;
+struct 
+{
+  GQueue* P;
+  GQueue* D;
+  GQueue* N;
+  GQueue *R;
+} MBQueue;
+
+/* Part.1 Seed Priorization */
+
+/* Part.2 Seed Selection */
+
+/* Part.2 Seed Selection */
+
+/* Part.3 Entropic */
+
+/* Part.4 Byte Inference */
+extern u64 cksum_temp;
+// extern u8 byte_temp;
+extern u32 byte_orig_func;
+extern u32 byte_orig_ac;
+extern u32 byte_orig_oom;
+extern float byte_orig_oob;
+
+extern u32 byte_cur_func;
+extern u32 byte_cur_ac;
+extern u32 byte_cur_oom;
+extern float byte_cur_oob;
+
+// extern u8 byte_mutate_list[12];
+
+/* Method */
+gboolean iter_all_edge(gpointer key, gpointer value, gpointer userdata);
+u8 dominate_level_0(struct queue_entry *a, struct queue_entry *b);
+u8 dominate_level_1(struct queue_entry *a, struct queue_entry *b);
+u8 dominate_level_2(struct queue_entry *a, struct queue_entry *b);
+u8 dominate_level_3(struct queue_entry *a, struct queue_entry *b);
+u8 dominate_level_4(struct queue_entry *a, struct queue_entry *b);
+u8 update_ranks(struct queue_entry *a, struct queue_entry *b, u8 level);
+void RankAddOne(gpointer selfdata, gpointer userdata);
+void RankSetToZero(gpointer selfdata, gpointer userdata);
+void AddToQD(gpointer selfdata,gpointer userdata);
+void AddToQP(gpointer selfdata, gpointer userdata);
+void IterIn(gpointer selfdata, gpointer userdata);
+void IterOutD(gpointer selfdata, gpointer userdata);
+void IterOutR(gpointer selfdata, gpointer userdata);
+void supply_for_P(afl_state_t *afl);
+void update_multibugs_seed(struct queue_entry *);
+void FindRightLocInsert(GHashTable *t, u32 Idx);
+void UpdateEnergy(afl_state_t *afl, struct queue_entry *q);
+void UpdateCorpusDistribution(afl_state_t *afl, struct queue_entry *afl_seed);
+void UpdateFeatureFrequency(afl_state_t *, struct queue_entry *);
+void AddRareFeature(afl_state_t *afl, int Idx);
+void Add_to_Group(afl_state_t *, u32 , u8 , void *);
+// void update_related_bytes(afl_state_t *);
+void zip_byte_infer(afl_state_t *afl, int metric_type, u8 *temp_key_byte_lookup,u8 *temp_key_byte_orig,u8 *out_buf,u32 temp_len);
+void destroy_sub_seed(struct queue_entry* q); 
+// u8 zap_byte_infer(afl_state_t *afl, int metric_type, u8 *temp_key_byte_lookup,u32 len,u8 *temp_key_byte_orig,u8 *out_buf,u32 temp_len);
+#endif
