@@ -27,7 +27,7 @@ First you need to compile the target program you want to fuzz with `afl-clang-fa
     export CC=/path/to/BazzAFL/afl-clang-fast
     export CXX=/path/to/BazzAFL/afl-clang-fast++
 ```
-If something goes wrong, make sure your clamg and LLVM >= 11 and GLib-2.0 has been installed correctly
+If something goes wrong, make sure your clang and LLVM >= 11 and GLib-2.0 has been installed correctly
 
 ```bash
     clang --version
