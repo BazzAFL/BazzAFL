@@ -16,7 +16,7 @@ We recommend running BazzAFL on Ubuntu 16.04/20.04
 
 ## Build
 ```bash
-    git clone pull https://github.com/BazzAFL/BazzAFL.git
+    git clone https://github.com/BazzAFL/BazzAFL.git
     cd BazzAFL
     make 
 ```
