@@ -57,7 +57,8 @@ or
 
 If you want to try BazzAFL on a new program, 
 1. Compile the new program from source code using BazzAFL/afl-clang-fast or BazzAFL/afl-clang-fast++
-2. Prepare appropriate input files
+2. After compiling, do not forget to unset CC/CXX
+3. Prepare appropriate input files
 
 
 ## Running BazzAFL
