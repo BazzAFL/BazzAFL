@@ -12,6 +12,7 @@ We have tested on a machine with Ubuntu 16.04/18.04/20.04 LLVM 13.0.0 <br/>
 
 We recommend running BazzAFL on Ubuntu 16.04/20.04
 - LLVM >= 11 (recommend [pre-built LLVM 13.0.0](https://github.com/llvm/llvm-project/releases/tag/llvmorg-13.0.0))
+- LLVM 14 is not supported after testing, so we recommend LLVM 13 pre-built version
 - GLib–2.0 (source:[glib2.0](https://gitlab.gnome.org/GNOME/glib/))
 
 ## Build
