@@ -79,7 +79,6 @@ u64 cksum_temp = 0;
 inline gboolean iter_all_edge(gpointer key, gpointer value, gpointer userdata) {
   u32 LocalIncidence = GPOINTER_TO_UINT(value) + 1;
   EnergyUnit *eu = (EnergyUnit *)userdata;
-  // printf("iter_all_edge LocalIncidence:%d\n", LocalIncidence);
   if(LocalIncidence > 1){
     eu->Energy -= LocalIncidence * log(LocalIncidence);
     eu->SumIncidence += LocalIncidence;
@@ -96,10 +95,10 @@ inline u8 dominate_level_0(struct queue_entry* a, struct queue_entry* b)
 {
   if(a->exec_us<b->exec_us){
     if(a->bitmap_size>b->bitmap_size){
-      if(a->max_func_count>=b->max_func_count){
-        if(a->max_oom_size>=b->max_oom_size){
-          if(a->max_ac_count>=b->max_ac_count){
-            if(a->max_oob_total>=b->max_oob_total){
+      if(a->max_func_count>b->max_func_count){
+        if(a->max_oom_size>b->max_oom_size){
+          if(a->max_ac_count>b->max_ac_count){
+            if(a->max_oob_total>b->max_oob_total){
               return 1;
             }
           }
@@ -114,10 +113,10 @@ inline u8 dominate_level_0(struct queue_entry* a, struct queue_entry* b)
 inline u8 dominate_level_1(struct queue_entry* a, struct queue_entry* b)
 {
   if(a->bitmap_size>b->bitmap_size){
-    if(a->max_func_count>=b->max_func_count){
-      if(a->max_oom_size>=b->max_oom_size){
-        if(a->max_ac_count>=b->max_ac_count){
-          if(a->max_oob_total>=b->max_oob_total){
+    if(a->max_func_count>b->max_func_count){
+      if(a->max_oom_size>b->max_oom_size){
+        if(a->max_ac_count>b->max_ac_count){
+          if(a->max_oob_total>b->max_oob_total){
             return 1;
           }
         }
@@ -145,9 +144,9 @@ inline u8 dominate_level_2(struct queue_entry* a, struct queue_entry* b)
 // delete ac cond
 inline u8 dominate_level_3(struct queue_entry* a, struct queue_entry* b)
 {
-  if(a->max_func_count>=b->max_func_count){
-    if(a->max_oom_size>=b->max_oom_size){
-      if(a->max_oob_total>=b->max_oob_total){
+  if(a->max_func_count>b->max_func_count){
+    if(a->max_oom_size>b->max_oom_size){
+      if(a->max_oob_total>b->max_oob_total){
         return 1;
       }
     }
@@ -157,8 +156,8 @@ inline u8 dominate_level_3(struct queue_entry* a, struct queue_entry* b)
 // delete func cond
 inline u8 dominate_level_4(struct queue_entry* a, struct queue_entry* b)
 {
-  if(a->max_oom_size>=b->max_oom_size){
-    if(a->max_oob_total>=b->max_oob_total){
+  if(a->max_oom_size>b->max_oom_size){
+    if(a->max_oob_total>b->max_oob_total){
       return 1;
     }
   }

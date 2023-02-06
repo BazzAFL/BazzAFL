@@ -3487,19 +3487,31 @@ static u8 mopt_common_fuzzing(afl_state_t *afl, MOpt_globals_t MOpt_globals) {
    * PERFORMANCE SCORE *
    *********************/
 
+
+
   if (likely(!afl->old_seed_selection))
     orig_perf = perf_score = afl->queue_cur->perf_score;
   else
     orig_perf = perf_score = calculate_score(afl, afl->queue_cur);
 
   /* BazzAFL */
+  /* 
+    Since our method makes changes to the energy distribution, 
+    the seed group needs more initial energy to ensure that each seed energy is not too small.
+
+    You can also set a larger initial energy by '-p EXPLOIT' or just modify here 
+    to get enough exploration for each sub-seed.
+  */
+  if (afl->MB_switch) {
+    perf_score *= 2;
+    orig_perf = perf_score;
+  }
   /* Energy Allocate */
   if(MB_Options.EnergyEnabled)
   {
     perf_score = (int)(Weights[afl->queue_cur->seed_type]*perf_score);
     orig_perf = perf_score;
   }
-  /* Energy Allocate */
 
   if (unlikely(perf_score <= 0 && afl->active_items > 1)) {
 

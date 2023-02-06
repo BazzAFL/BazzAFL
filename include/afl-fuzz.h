@@ -1279,8 +1279,8 @@ static inline u32 rand_below_MB(afl_state_t *afl, u32 limit, u8 seed_type) {
   {
     return unbiased_rnd % limit;
   }else{
-    if(unbiased_rnd % 2){
-      return unbiased_rnd % limit; // 50% will use original rand_below
+    if(unbiased_rnd % 5){
+      return unbiased_rnd % limit; // 20% will use original rand_below
     }else{
       u32 ret = 0;
       u8 seed = seed_type - 1;

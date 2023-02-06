@@ -565,26 +565,16 @@ int main(int argc, char **argv_orig, char **envp) {
         case 1:
           OKF("**** Schedule ****");
           MB_Options.ScheduleEnabled = 1;
-          /* 
-            Since our method makes changes to the energy distribution, 
-            the seed group needs more initial energy to ensure that each seed energy is not too small.
-
-            You can also set a larger initial energy by '-p EXPLOIT' or just modify here 
-            to get enough exploration for each sub-seed.
-          */
-          afl->schedule = EXPLORE;
           break;
 
         case 2:
           OKF("**** Energy ****");
           MB_Options.EnergyEnabled = 1;
-          afl->schedule = EXPLORE;
           break;
 
         case 3:
           OKF("**** Mutate ****");
           MB_Options.MutateEnabled = 1;
-          afl->schedule = EXPLORE;
           break;
 
         case 4:
@@ -592,7 +582,6 @@ int main(int argc, char **argv_orig, char **envp) {
           MB_Options.EnergyEnabled = 1;
           MB_Options.MutateEnabled = 1;
           MB_Options.ScheduleEnabled = 1;
-          afl->schedule = EXPLORE;
           // use_splicing = 1;
           break;
 
@@ -2322,6 +2311,7 @@ int main(int argc, char **argv_orig, char **envp) {
   {
     u32 n = afl->queued_items, i = 0;
     struct queue_entry *q = afl->queue_buf[i];
+    // first push all the initial seed into Queue D
     for (i = 0; i < n; i++)
     {
       q = afl->queue_buf[i];
@@ -2329,8 +2319,8 @@ int main(int argc, char **argv_orig, char **envp) {
       q->q_rank = 2;
       D_num++;
     }
-    // printf("D_num:%d\n", D_num);
-    // TODO:Is the pointer q pushed into Gqueue or the whole seed struct?
+    printf("D_num:%d\n", D_num);
+
     queue_rank = -1;
     afl->queue_cycle = 1;
 
@@ -2339,13 +2329,13 @@ int main(int argc, char **argv_orig, char **envp) {
       cull_queue(afl);
 
       /* BazzAFL */
-      // printf("P num :%u\n", g_queue_get_length(MBQueue.P));
-      if (g_queue_is_empty(MBQueue.P))
-      {
-        // printf("P is empty!\n");
-        supply_for_P(afl);
+      printf("P num :%u\n", P_num);
+
+      if(P_num == 0){
+        printf("P is empty!\n");
+        supply_for_P(afl);       
       }
-      if (g_queue_is_empty(MBQueue.P))
+      if(P_num == 0)
         continue; // if queue_P is still empty after supply,just skip and wait for next round of supply
       /* BazzAFL */
 
@@ -2635,6 +2625,7 @@ int main(int argc, char **argv_orig, char **envp) {
             default:
               break;
           }
+
           if(skip_sub_seed){
             skip_sub_seed = 0;
           }else{
@@ -2704,7 +2695,8 @@ int main(int argc, char **argv_orig, char **envp) {
       // push s into R
       if(afl->queue_cur)
       {
-        afl->queue_cur->q_rank = 8;
+        afl->queue_cur->q_rank = 8; // give the recycle seed a higher rank to move it into R 
+        P_num--; 
         g_queue_push_tail(MBQueue.R, afl->queue_cur);
       }
 
